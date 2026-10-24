@@ -170,21 +170,31 @@ describe('PIIDetectorEvaluator', () => {
   });
 
   describe('IP Address Detection', () => {
-    it('should detect IPv4 addresses', async () => {
+    it('should detect public IPv4 addresses', async () => {
       const result = await runEvaluator('pii', {
         input: 'test',
-        output: 'Server IP: 192.168.1.100',
+        output: 'Client IP: 93.184.216.34',
         config: { fail_on: ['ip_address'] },
       });
 
       expect(result.passed).toBe(false);
     });
 
-    it('should detect valid IPv4 range', async () => {
+    it('should NOT flag private or loopback IPv4 addresses by default', async () => {
+      const result = await runEvaluator('pii', {
+        input: 'test',
+        output: 'Router: 192.168.1.100, VPN: 10.0.0.1, local: 127.0.0.1',
+        config: { fail_on: ['ip_address'] },
+      });
+
+      expect(result.passed).toBe(true);
+    });
+
+    it('should flag private IPv4 addresses when min_confidence is low', async () => {
       const result = await runEvaluator('pii', {
         input: 'test',
         output: 'IP: 10.0.0.1',
-        config: { fail_on: ['ip_address'] },
+        config: { fail_on: ['ip_address'], min_confidence: 'low' },
       });
 
       expect(result.passed).toBe(false);

@@ -1,142 +1,22 @@
 /**
  * Input Sanitization Pipeline
  *
- * Detects prompt injection attempts and sanitizes input using:
- * 1. Heuristic pattern matching (from CLI evaluator)
- * 2. LLM-based rephrasing to extract legitimate intent
+ * Detects prompt injection attempts in user messages using the shared
+ * `@evidentai/detectors` pattern library and applies the configured action:
  *
- * Based on patterns from @evidentai/cli prompt-injection evaluator.
+ * - `block`: reject the request
+ * - `rephrase`: rewrite offending user messages with an internal LLM (falls
+ *   back to stripping high-confidence matches when no LLM is configured)
+ * - `log`: pass the request through unchanged and only report
  */
 
+import {
+  detectInjection,
+  type InjectionMatch as LibraryMatch,
+  type Sensitivity,
+} from '@evidentai/detectors';
 import type { ChatMessage, InputSanitizationResult, InjectionMatch } from '../types.js';
 import { rephraseWithLLM } from '../sanitizers/injection-rephraser.js';
-
-// =============================================================================
-// Injection Detection Patterns (from CLI)
-// =============================================================================
-
-interface PatternDef {
-  name: string;
-  pattern: RegExp;
-  confidence: 'high' | 'medium' | 'low';
-}
-
-// High confidence patterns - very likely injection attempts
-const HIGH_CONFIDENCE_PATTERNS: PatternDef[] = [
-  {
-    name: 'ignore_instructions',
-    pattern: /ignore\s+(?:all\s+)?(?:previous|prior|above|earlier|my|your|the)\s+(?:instructions?|prompts?|rules?|guidelines?|constraints?)/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'disregard_instructions',
-    pattern: /disregard\s+(?:all\s+)?(?:previous|prior|above|earlier|my|your|the)\s+(?:instructions?|prompts?|rules?|guidelines?|constraints?)/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'forget_instructions',
-    pattern: /forget\s+(?:all\s+)?(?:previous|prior|above|earlier|everything|what)\s+(?:instructions?|prompts?|i\s+said|you\s+were\s+told)?/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'new_instructions',
-    pattern: /(?:new|real|actual|true)\s+instructions?\s*[:=]/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'system_prompt_override',
-    pattern: /\[?\s*system\s*\]?\s*[:=]?\s*(?:you\s+are|your\s+(?:new\s+)?(?:instructions?|role|purpose))/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'jailbreak_dan',
-    pattern: /\bDAN\s*(?:mode|prompt|jailbreak)|\bDo\s+Anything\s+Now\b/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'jailbreak_developer_mode',
-    pattern: /developer\s+mode\s+enabled|enable\s+developer\s+mode/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'roleplay_evil',
-    pattern: /(?:pretend|act|behave)\s+(?:to\s+be|as\s+if\s+you(?:'re|\s+are)?|like\s+you(?:'re|\s+are)?)\s+(?:an?\s+)?(?:evil|malicious|unethical|unrestricted|uncensored)/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'override_safety',
-    pattern: /(?:bypass|disable|ignore|remove|turn\s+off)\s+(?:your\s+)?(?:safety|filter|guard|restriction|ethical)/gi,
-    confidence: 'high',
-  },
-  {
-    name: 'injection_delimiter',
-    pattern: /(?:---+|===+|\*\*\*+)\s*(?:ignore|disregard|forget|new\s+instructions?)/gi,
-    confidence: 'high',
-  },
-];
-
-// Medium confidence patterns - suspicious but may have legitimate uses
-const MEDIUM_CONFIDENCE_PATTERNS: PatternDef[] = [
-  {
-    name: 'context_switch',
-    pattern: /(?:---+|===+|\*\*\*+)\s*(?:new|end|start|begin)\s+(?:conversation|context|session|instructions?)/gi,
-    confidence: 'medium',
-  },
-  {
-    name: 'hypothetical_bypass',
-    pattern: /(?:hypothetically|theoretically|for\s+(?:educational|research)\s+purposes?|in\s+a\s+fictional\s+(?:scenario|world))\s*,?\s*(?:how\s+(?:would|could|can)|what\s+if)/gi,
-    confidence: 'medium',
-  },
-  {
-    name: 'roleplay_character',
-    pattern: /(?:you\s+are\s+now|from\s+now\s+on\s+you\s+are|pretend\s+(?:to\s+be|you\s+are)|act\s+as\s+(?:if\s+you\s+are)?|roleplay\s+as)\s+(?:a\s+)?[a-z]+/gi,
-    confidence: 'medium',
-  },
-  {
-    name: 'admin_override',
-    pattern: /(?:admin|administrator|root|sudo|superuser)\s+(?:mode|access|override|privileges?|commands?)/gi,
-    confidence: 'medium',
-  },
-  {
-    name: 'prompt_leak_attempt',
-    pattern: /(?:show|display|print|output|reveal|tell\s+me|what\s+is)\s+(?:your|the)\s+(?:system\s+)?(?:prompt|instructions?|rules?|guidelines?)/gi,
-    confidence: 'medium',
-  },
-  {
-    name: 'base64_injection',
-    pattern: /(?:decode|interpret|run)\s+(?:this\s+)?base64\s*[:=]?\s*[A-Za-z0-9+/=]{20,}/gi,
-    confidence: 'medium',
-  },
-  {
-    name: 'hidden_text_injection',
-    pattern: /(?:hidden|invisible|secret)\s+(?:text|message|instruction)/gi,
-    confidence: 'medium',
-  },
-];
-
-// Low confidence patterns - could be injection but often false positives
-const LOW_CONFIDENCE_PATTERNS: PatternDef[] = [
-  {
-    name: 'code_block_injection',
-    pattern: /```(?:system|instructions?|prompt)\n[\s\S]*?```/gi,
-    confidence: 'low',
-  },
-  {
-    name: 'xml_tag_injection',
-    pattern: /<\/?(?:system|instructions?|prompt|rules?|guidelines?)>/gi,
-    confidence: 'low',
-  },
-  {
-    name: 'special_tokens',
-    pattern: /\[\/?(?:INST|SYS|SYSTEM|ASSISTANT|USER)\]|\<\|(?:im_start|im_end|system|assistant|user)\|?\>/gi,
-    confidence: 'low',
-  },
-  {
-    name: 'separator_flood',
-    pattern: /(?:[-=_*#]{10,}|\.{10,}|\n{5,})/g,
-    confidence: 'low',
-  },
-];
 
 // =============================================================================
 // Configuration
@@ -144,7 +24,7 @@ const LOW_CONFIDENCE_PATTERNS: PatternDef[] = [
 
 export interface InputSanitizerConfig {
   /** Sensitivity level for injection detection */
-  sensitivity: 'low' | 'medium' | 'high';
+  sensitivity: Sensitivity;
   /** Action to take on detection */
   action: 'block' | 'rephrase' | 'log';
   /** Internal LLM configuration for rephrasing */
@@ -152,52 +32,33 @@ export interface InputSanitizerConfig {
     apiKey?: string;
     model?: string;
   };
+  /** Extra regex sources treated as high-confidence injection patterns */
+  customPatterns?: string[];
 }
 
 // =============================================================================
-// Detection Function
+// Detection
 // =============================================================================
 
-function detectInjection(
+function toGatewayMatch(match: LibraryMatch): InjectionMatch {
+  return {
+    technique: match.technique,
+    category: match.category,
+    severity: match.severity,
+    pattern: match.description,
+    matched: match.matched,
+    position: match.position,
+    confidence: match.confidence,
+    inInput: true,
+  };
+}
+
+export function detectInjectionInText(
   text: string,
-  sensitivity: 'low' | 'medium' | 'high'
+  sensitivity: Sensitivity,
+  customPatterns?: string[]
 ): InjectionMatch[] {
-  const matches: InjectionMatch[] = [];
-
-  // Select patterns based on sensitivity
-  let patterns: PatternDef[] = [...HIGH_CONFIDENCE_PATTERNS];
-  if (sensitivity === 'medium' || sensitivity === 'high') {
-    patterns = [...patterns, ...MEDIUM_CONFIDENCE_PATTERNS];
-  }
-  if (sensitivity === 'high') {
-    patterns = [...patterns, ...LOW_CONFIDENCE_PATTERNS];
-  }
-
-  for (const { name, pattern, confidence } of patterns) {
-    // Reset regex lastIndex
-    pattern.lastIndex = 0;
-
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(text)) !== null) {
-      // Avoid duplicate matches at same position
-      const isDuplicate = matches.some(
-        (m) => m.technique === name && m.position === match!.index
-      );
-
-      if (!isDuplicate) {
-        matches.push({
-          technique: name,
-          pattern: pattern.source.substring(0, 50) + '...',
-          matched: match[0].substring(0, 100),
-          position: match.index,
-          confidence,
-          inInput: true,
-        });
-      }
-    }
-  }
-
-  return matches;
+  return detectInjection(text, { sensitivity, customPatterns }).map(toGatewayMatch);
 }
 
 // =============================================================================
@@ -210,18 +71,22 @@ export async function sanitizeInput(
 ): Promise<InputSanitizationResult> {
   const startTime = Date.now();
   const allMatches: InjectionMatch[] = [];
+  const matchesByMessage = new Map<number, InjectionMatch[]>();
 
-  // Check each message for injection patterns
-  for (const message of messages) {
+  // Only user-authored content is untrusted; system and assistant turns are
+  // controlled by the application.
+  messages.forEach((message, index) => {
     if (message.content && message.role === 'user') {
-      const matches = detectInjection(message.content, config.sensitivity);
-      allMatches.push(...matches);
+      const matches = detectInjectionInText(message.content, config.sensitivity, config.customPatterns);
+      if (matches.length > 0) {
+        matchesByMessage.set(index, matches);
+        allMatches.push(...matches);
+      }
     }
-  }
+  });
 
   const injectionDetected = allMatches.length > 0;
 
-  // Determine action
   let blocked = false;
   let blockReason: string | undefined;
   let sanitizedMessages = messages;
@@ -231,25 +96,28 @@ export async function sanitizeInput(
       case 'block': {
         blocked = true;
         const highConfidence = allMatches.filter((m) => m.confidence === 'high');
+        const techniques = [...new Set((highConfidence.length > 0 ? highConfidence : allMatches).map((m) => m.technique))];
         blockReason = highConfidence.length > 0
-          ? `Blocked due to high-confidence injection: ${highConfidence.map((m) => m.technique).join(', ')}`
-          : `Blocked due to injection patterns: ${allMatches.map((m) => m.technique).join(', ')}`;
+          ? `Blocked due to high-confidence injection: ${techniques.join(', ')}`
+          : `Blocked due to injection patterns: ${techniques.join(', ')}`;
         break;
       }
 
       case 'rephrase': {
-        // Only rephrase if we have an LLM configured
-        if (config.internalLLM?.apiKey) {
-          sanitizedMessages = await rephraseMessages(messages, config.internalLLM);
+        const apiKey = config.internalLLM?.apiKey || process.env.OPENAI_API_KEY;
+        if (apiKey) {
+          sanitizedMessages = await rephraseMessages(messages, matchesByMessage, {
+            apiKey,
+            model: config.internalLLM?.model || 'gpt-4o-mini',
+          });
         } else {
-          // Fall back to basic cleanup if no LLM available
-          sanitizedMessages = basicCleanup(messages, allMatches);
+          sanitizedMessages = basicCleanup(messages, matchesByMessage);
         }
         break;
       }
 
       case 'log':
-        // Just log, don't modify
+        // Report only, do not modify
         break;
     }
   }
@@ -271,29 +139,15 @@ export async function sanitizeInput(
 
 async function rephraseMessages(
   messages: ChatMessage[],
-  llmConfig: { apiKey?: string; model?: string }
+  matchesByMessage: Map<number, InjectionMatch[]>,
+  llmConfig: { apiKey: string; model: string }
 ): Promise<ChatMessage[]> {
   const result: ChatMessage[] = [];
 
-  for (const message of messages) {
-    if (message.role === 'user' && message.content) {
-      // Check if this message has injection patterns
-      const matches = detectInjection(message.content, 'medium');
-
-      if (matches.length > 0) {
-        // Rephrase this message using LLM
-        const rephrased = await rephraseWithLLM(message.content, {
-          apiKey: llmConfig.apiKey || process.env.OPENAI_API_KEY || '',
-          model: llmConfig.model || 'gpt-4o-mini',
-        });
-
-        result.push({
-          ...message,
-          content: rephrased,
-        });
-      } else {
-        result.push(message);
-      }
+  for (const [index, message] of messages.entries()) {
+    if (matchesByMessage.has(index) && message.content) {
+      const rephrased = await rephraseWithLLM(message.content, llmConfig);
+      result.push({ ...message, content: rephrased });
     } else {
       result.push(message);
     }
@@ -302,48 +156,41 @@ async function rephraseMessages(
   return result;
 }
 
+/**
+ * Strip high-confidence matches out of the offending messages. Positions come
+ * from the detector, so removal is exact and does not rely on substring
+ * search.
+ */
 function basicCleanup(
   messages: ChatMessage[],
-  matches: InjectionMatch[]
+  matchesByMessage: Map<number, InjectionMatch[]>
 ): ChatMessage[] {
-  // Create a map of positions to remove
-  const removals = new Map<string, Array<{ start: number; end: number }>>();
-
-  for (const match of matches) {
-    // Only remove high confidence matches in basic cleanup
-    if (match.confidence !== 'high') continue;
-
-    const key = messages.findIndex(
-      (m) => m.role === 'user' && m.content?.includes(match.matched)
-    );
-    if (key === -1) continue;
-
-    if (!removals.has(key.toString())) {
-      removals.set(key.toString(), []);
-    }
-    removals.get(key.toString())!.push({
-      start: match.position,
-      end: match.position + match.matched.length,
-    });
-  }
-
   return messages.map((message, index) => {
-    const messageRemovals = removals.get(index.toString());
-    if (!messageRemovals || !message.content) {
+    const matches = matchesByMessage.get(index);
+    if (!matches || !message.content) {
       return message;
     }
 
-    // Sort removals by position (descending) to preserve positions during removal
-    messageRemovals.sort((a, b) => b.start - a.start);
+    const removals = matches
+      .filter((m) => m.confidence === 'high')
+      .map((m) => ({ start: m.position, end: m.position + m.matched.length }))
+      .sort((a, b) => b.start - a.start);
+
+    if (removals.length === 0) {
+      return message;
+    }
 
     let content = message.content;
-    for (const removal of messageRemovals) {
+    let lastStart = Number.POSITIVE_INFINITY;
+    for (const removal of removals) {
+      if (removal.end > lastStart) continue; // overlapping range already removed
       content = content.slice(0, removal.start) + content.slice(removal.end);
+      lastStart = removal.start;
     }
 
     return {
       ...message,
-      content: content.trim(),
+      content: content.replace(/\s{2,}/g, ' ').trim(),
     };
   });
 }

@@ -56,14 +56,35 @@ describe('Output Processor', () => {
       expect(result.piiDetected).toBe(false);
     });
 
-    it('detects IP addresses', async () => {
+    it('detects public IP addresses', async () => {
       const result = await processOutput(
-        'Server IP: 192.168.1.100',
+        'Client IP: 93.184.216.34',
         { piiTypes: ['ip_address'], action: 'log' }
       );
 
       expect(result.piiDetected).toBe(true);
-      expect(result.piiMatches[0]?.value).toBe('192.168.1.100');
+      expect(result.piiMatches[0]?.value).toBe('93.184.216.34');
+    });
+
+    it('ignores private IP addresses unless minConfidence is low', async () => {
+      const text = 'Server IP: 192.168.1.100';
+      const def = await processOutput(text, { piiTypes: ['ip_address'], action: 'log' });
+      expect(def.piiDetected).toBe(false);
+
+      const low = await processOutput(text, { piiTypes: ['ip_address'], action: 'log', minConfidence: 'low' });
+      expect(low.piiDetected).toBe(true);
+    });
+
+    it('honours allowValues and allowPatterns', async () => {
+      const text = 'Call 1-800-555-0199 or email help@company.com';
+      const result = await processOutput(text, {
+        piiTypes: ['phone', 'email'],
+        action: 'redact',
+        allowValues: ['1-800-555-0199'],
+        allowPatterns: ['@company\\.com$'],
+      });
+      expect(result.piiDetected).toBe(false);
+      expect(result.processed).toBe(text);
     });
 
     it('detects multiple PII types', async () => {

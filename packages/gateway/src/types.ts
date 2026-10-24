@@ -8,6 +8,8 @@
  * - Logging and audit types
  */
 
+import type { InjectionCategory, PIIEntityType, PIIMatch, Severity, Confidence } from '@evidentai/detectors';
+
 // =============================================================================
 // OpenAI-Compatible API Types
 // =============================================================================
@@ -145,6 +147,8 @@ export interface InputPipelineConfig {
   injectionSensitivity: 'low' | 'medium' | 'high';
   /** Action on injection detection */
   injectionAction: 'block' | 'rephrase' | 'log';
+  /** Extra regex sources treated as high-confidence injection patterns */
+  injectionCustomPatterns?: string[];
   /** Enable input logging */
   logInput: boolean;
 }
@@ -156,31 +160,21 @@ export interface OutputPipelineConfig {
   piiTypes: PIIEntityType[];
   /** Action on PII detection */
   piiAction: 'block' | 'redact' | 'log';
+  /** Ignore PII matches below this confidence (default `medium`) */
+  piiMinConfidence?: Confidence;
+  /** Known non-PII values to ignore (support numbers, company addresses) */
+  piiAllowValues?: string[];
+  /** Regular expressions whose matches are not PII */
+  piiAllowPatterns?: string[];
   /** Enable output logging */
   logOutput: boolean;
 }
 
 // =============================================================================
-// PII Types (matching CLI package)
+// PII Types (shared with the CLI through @evidentai/detectors)
 // =============================================================================
 
-export type PIIEntityType =
-  | 'email'
-  | 'phone'
-  | 'ssn'
-  | 'credit_card'
-  | 'ip_address'
-  | 'address'
-  | 'name'
-  | 'date_of_birth';
-
-export interface PIIMatch {
-  type: PIIEntityType;
-  value: string;
-  start: number;
-  end: number;
-  confidence: 'high' | 'medium' | 'low';
-}
+export type { PIIEntityType, PIIMatch } from '@evidentai/detectors';
 
 // =============================================================================
 // Injection Types
@@ -188,6 +182,9 @@ export interface PIIMatch {
 
 export interface InjectionMatch {
   technique: string;
+  category: InjectionCategory;
+  severity: Severity;
+  /** Human readable description of the matched pattern */
   pattern: string;
   matched: string;
   position: number;

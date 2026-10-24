@@ -13,4 +13,6 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   treeshake: true,
+  // Private workspace package: bundle it so the published shield is self-contained.
+  noExternal: ['@evidentai/detectors'],
 });

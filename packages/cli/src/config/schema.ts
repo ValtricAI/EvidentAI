@@ -55,7 +55,13 @@ export const LLMJudgeConfigSchema = z.object({
 export const PIIConfigSchema = z.object({
   fail_on: z.array(PIIEntityTypeSchema).min(1, 'Must specify at least one PII type to check'),
   allow: z.array(PIIEntityTypeSchema).optional(),
-  redact: z.boolean().default(false).describe('Redact PII in output instead of failing'),
+  redact: z.boolean().default(false).describe('Include a redacted copy of the output in the result details'),
+  min_confidence: z.enum(['low', 'medium', 'high']).default('medium')
+    .describe('Ignore matches below this confidence (private IPs and bare 10-digit numbers are low)'),
+  allow_values: z.array(z.string()).optional()
+    .describe('Known non-PII values to ignore, e.g. your support phone number'),
+  allow_patterns: z.array(z.string()).optional()
+    .describe('Regular expressions; matching values are ignored, e.g. "@yourcompany\\.com$"'),
 });
 
 export const PromptInjectionConfigSchema = z.object({
@@ -66,8 +72,10 @@ export const PromptInjectionConfigSchema = z.object({
   sensitivity: z.enum(VALID_SENSITIVITIES, {
     errorMap: () => ({ message: `Invalid sensitivity. Expected one of: ${VALID_SENSITIVITIES.join(', ')}` }),
   }).default('medium'),
-  check_input: z.boolean().default(true),
-  check_output: z.boolean().default(true),
+  check_input: z.boolean().default(false)
+    .describe('Scan the test input for attack patterns. Off by default: in a release gate the input IS the attack'),
+  check_output: z.boolean().default(true)
+    .describe('Scan the model output for compliance with the attack, echoed delimiters and leaked canaries'),
   llm_config: z.object({
     model: z.string().optional(),
     api_key: z.string().optional(),
