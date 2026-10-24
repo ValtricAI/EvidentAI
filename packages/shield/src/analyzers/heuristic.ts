@@ -17,7 +17,7 @@ import type { Analyzer, ThreatDetection, ShieldConfig, ThreatLevel } from '../ty
  * - `high`: adds low severity patterns (noisy; for audits)
  */
 export class HeuristicAnalyzer implements Analyzer {
-  name: 'heuristic' = 'heuristic';
+  name = 'heuristic' as const;
 
   async analyze(input: string, config: ShieldConfig): Promise<ThreatDetection> {
     const startTime = performance.now();

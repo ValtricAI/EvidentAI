@@ -181,10 +181,12 @@ const openai = new OpenAI({
 ```
 
 **Features:**
-- Prompt injection detection (20+ patterns)
-- PII detection and redaction (email, phone, SSN, credit card, etc.)
-- Multi-provider routing (OpenAI, Anthropic, Azure)
-- Request/response logging for compliance
+- Prompt injection detection using the same tuned pattern library as the CLI (`@evidentai/detectors`), with four severity levels and three sensitivity settings
+- PII detection and redaction (email, phone, SSN, credit card, etc.) with confidence levels and allowlists
+- Multi-provider routing (OpenAI, Anthropic, Azure) with tool calling passed through
+- Request/response logging
+
+By default the gateway only logs detected injections and redacts PII. Blocking and rephrasing are opt-in, because a heuristic false positive must never silently rewrite a user's message.
 
 See [packages/gateway/README.md](./packages/gateway/README.md) for full documentation.
 
@@ -204,13 +206,14 @@ EvidentAI/
 │   │   │       └── providers/   # OpenAI, Anthropic, Azure
 │   │   └── bin/
 │   ├── gateway/             # @evidentai/gateway (LLM security proxy)
-│   └── shield/              # @evidentai/shield (runtime middleware)
+│   ├── shield/              # @evidentai/shield (runtime middleware)
+│   └── detectors/           # shared injection + PII pattern library (bundled into the above)
 │
 ├── apps/
-│   ├── api/                 # FastAPI backend (coming soon)
-│   └── web/                 # Next.js dashboard (coming soon)
+│   ├── api/                 # FastAPI backend: runs and projects endpoints work; the rest are stubs
+│   └── web/                 # Next.js dashboard: placeholder files only
 │
-└── docs/
+└── docs/                    # placeholder files only
 ```
 
 ---
@@ -230,14 +233,14 @@ EvidentAI/
 
 | Component | Status |
 |-----------|--------|
-| **CLI** | ✅ Complete - 159 tests passing |
-| **Gateway** | ✅ Complete - 52 tests passing |
-| **Real LLM Testing** | ✅ Verified with OpenAI |
-| **npm Package** | ✅ Ready to publish |
-| **Dashboard** | 🔜 Coming soon |
-| **API** | 🔜 Coming soon |
+| **Detectors** | Shared pattern library. Corpus test: 150+ attacks caught, 130+ benign messages clean. 428 tests. |
+| **CLI** | Usable. 243 tests (14 live-API tests skipped without keys). Not yet published to npm. |
+| **Gateway** | Usable for non-streaming chat completions, including tool calling. 75 tests. |
+| **Shield** | Usable. 213 tests. |
+| **API** | Partial. Runs and projects endpoints with API-key auth and 26 tests; suites, evidence packs, GitHub and auth routers are stubs. No migrations yet. |
+| **Dashboard** | Not started. |
 
-See [STARTUP_PLANNING.md](./STARTUP_PLANNING.md) for detailed roadmap.
+Detection is heuristic. The pattern library is tuned against a labelled corpus in `packages/detectors/src/__tests__`, and that corpus is the place to add a missed attack or a false positive.
 
 ---
 

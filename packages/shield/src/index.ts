@@ -31,7 +31,6 @@ import type {
   ThreatDetection,
   ThreatLevel,
   RequestContext,
-  AnalyzerType,
 } from './types.js';
 import { getAnalyzers } from './analyzers/index.js';
 import { parseConfig } from './config/schema.js';

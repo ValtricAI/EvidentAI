@@ -49,7 +49,7 @@ interface LLMResponse {
 }
 
 export class LLMJudgeAnalyzer implements Analyzer {
-  name: 'llm-judge' = 'llm-judge';
+  name = 'llm-judge' as const;
 
   async analyze(input: string, config: ShieldConfig): Promise<ThreatDetection> {
     const startTime = performance.now();
@@ -122,7 +122,7 @@ export class LLMJudgeAnalyzer implements Analyzer {
 
   private async callOpenAI(
     prompt: string,
-    config: ShieldConfig['llm'] & {}
+    config: NonNullable<ShieldConfig['llm']>
   ): Promise<Response> {
     const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OpenAI API key not configured');
@@ -144,7 +144,7 @@ export class LLMJudgeAnalyzer implements Analyzer {
 
   private async callAnthropic(
     prompt: string,
-    config: ShieldConfig['llm'] & {}
+    config: NonNullable<ShieldConfig['llm']>
   ): Promise<Response> {
     const apiKey = config.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error('Anthropic API key not configured');
@@ -166,7 +166,7 @@ export class LLMJudgeAnalyzer implements Analyzer {
 
   private async callCustom(
     prompt: string,
-    config: ShieldConfig['llm'] & {}
+    config: NonNullable<ShieldConfig['llm']>
   ): Promise<Response> {
     if (!config.endpoint) throw new Error('Custom endpoint not configured');
 

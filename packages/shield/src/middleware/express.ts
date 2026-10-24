@@ -29,6 +29,9 @@ export interface ExpressShieldOptions extends Partial<ShieldConfig> {
 }
 
 declare global {
+  // Express augments its Request type through this namespace; there is no
+  // module-syntax alternative for a global augmentation.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       shieldResult?: AnalysisResult;

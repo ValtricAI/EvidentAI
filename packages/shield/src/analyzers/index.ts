@@ -1,6 +1,6 @@
 import type { Analyzer, AnalyzerType } from '../types.js';
-import { HeuristicAnalyzer, heuristicAnalyzer } from './heuristic.js';
-import { LLMJudgeAnalyzer, llmJudgeAnalyzer } from './llm-judge.js';
+import { heuristicAnalyzer } from './heuristic.js';
+import { llmJudgeAnalyzer } from './llm-judge.js';
 
 export { HeuristicAnalyzer, heuristicAnalyzer } from './heuristic.js';
 export { LLMJudgeAnalyzer, llmJudgeAnalyzer } from './llm-judge.js';
