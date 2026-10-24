@@ -53,7 +53,10 @@ results/
 # npm pack artifacts
 *.tgz
 
-# Internal docs (not for public repo)
+# Internal planning docs
 STARTUP_PLANNING.md
-Architect.MD
-docs/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
