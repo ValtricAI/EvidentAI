@@ -1,11 +1,11 @@
 /**
  * EvidentAI Gateway
  *
- * Enterprise LLM security gateway that provides:
- * - OpenAI-compatible API endpoint
- * - Prompt injection detection and sanitization
- * - PII detection and redaction
- * - Request/response logging for compliance
+ * OpenAI-compatible LLM proxy that adds:
+ * - Prompt injection detection on user messages (log, block or rephrase)
+ * - PII detection and redaction on responses
+ * - Routing to OpenAI, Anthropic or Azure OpenAI with tool calling preserved
+ * - Request/response logging
  *
  * @example
  * ```ts
@@ -13,14 +13,8 @@
  *
  * const gateway = await createGateway({
  *   port: 3000,
- *   input: {
- *     detectInjection: true,
- *     injectionAction: 'rephrase',
- *   },
- *   output: {
- *     detectPII: true,
- *     piiAction: 'redact',
- *   },
+ *   input: { detectInjection: true, injectionAction: 'block' },
+ *   output: { detectPII: true, piiAction: 'redact' },
  * });
  *
  * await gateway.start();
@@ -33,29 +27,28 @@ import { nanoid } from 'nanoid';
 import type { GatewayConfig } from './types.js';
 import { AuthenticationError, GatewayError } from './types.js';
 import { registerChatCompletionsRoute } from './routes/chat-completions.js';
+import { ConfigError, configFromEnv, configWarnings, resolveConfig } from './config.js';
 
 // =============================================================================
-// Default Configuration
+// Informational model list for /v1/models
 // =============================================================================
 
-const DEFAULT_CONFIG: GatewayConfig = {
-  port: 3000,
-  host: '0.0.0.0',
-  cors: true,
-  logging: true,
-  input: {
-    detectInjection: true,
-    injectionSensitivity: 'medium',
-    injectionAction: 'rephrase',
-    logInput: true,
-  },
-  output: {
-    detectPII: true,
-    piiTypes: ['email', 'phone', 'ssn', 'credit_card'],
-    piiAction: 'redact',
-    logOutput: true,
-  },
-};
+/**
+ * The gateway does not know which models a provider key can reach; this list
+ * exists so OpenAI SDK clients that call /v1/models at startup get a sensible
+ * answer. Any model name is accepted by /v1/chat/completions.
+ */
+const KNOWN_MODELS: Array<{ id: string; owned_by: 'openai' | 'anthropic' }> = [
+  { id: 'gpt-4o', owned_by: 'openai' },
+  { id: 'gpt-4o-mini', owned_by: 'openai' },
+  { id: 'gpt-4.1', owned_by: 'openai' },
+  { id: 'gpt-4.1-mini', owned_by: 'openai' },
+  { id: 'o3', owned_by: 'openai' },
+  { id: 'o4-mini', owned_by: 'openai' },
+  { id: 'claude-opus-4-20250514', owned_by: 'anthropic' },
+  { id: 'claude-sonnet-4-20250514', owned_by: 'anthropic' },
+  { id: 'claude-3-5-haiku-20241022', owned_by: 'anthropic' },
+];
 
 // =============================================================================
 // Gateway Class
@@ -66,12 +59,7 @@ export class Gateway {
   private config: GatewayConfig;
 
   constructor(config: Partial<GatewayConfig> = {}) {
-    this.config = {
-      ...DEFAULT_CONFIG,
-      ...config,
-      input: { ...DEFAULT_CONFIG.input, ...config.input },
-      output: { ...DEFAULT_CONFIG.output, ...config.output },
-    };
+    this.config = resolveConfig(config);
 
     this.server = Fastify({
       logger: this.config.logging
@@ -96,7 +84,6 @@ export class Gateway {
   }
 
   private setupMiddleware(): void {
-    // CORS
     if (this.config.cors) {
       this.server.register(cors, {
         origin: true,
@@ -106,16 +93,20 @@ export class Gateway {
           'Authorization',
           'X-LLM-Provider',
           'X-LLM-API-Key',
+          'X-LLM-Base-URL',
           'X-LLM-Model',
+          'X-Azure-Endpoint',
+          'X-Azure-Deployment',
+          'X-Azure-API-Version',
           'X-Request-ID',
         ],
       });
     }
 
-    // API Key authentication (if configured)
+    // Gateway API key authentication (if configured)
     if (this.config.apiKey) {
+      const expected = this.config.apiKey;
       this.server.addHook('preHandler', async (request: FastifyRequest, _reply: FastifyReply) => {
-        // Skip auth for health check
         if (request.url === '/health' || request.url === '/v1/models') {
           return;
         }
@@ -126,51 +117,44 @@ export class Gateway {
         }
 
         const token = authHeader.slice(7);
-        if (token !== this.config.apiKey) {
+        if (!constantTimeEqual(token, expected)) {
           throw new AuthenticationError('Invalid API key');
         }
       });
     }
 
-    // Request ID decorator
     this.server.decorateRequest('requestId', '');
     this.server.addHook('preHandler', async (request: FastifyRequest) => {
+      const incoming = request.headers['x-request-id'];
       (request as FastifyRequest & { requestId: string }).requestId =
-        (request.headers['x-request-id'] as string) || request.id;
+        (Array.isArray(incoming) ? incoming[0] : incoming) || request.id;
     });
   }
 
   private setupRoutes(): void {
-    // Health check
     this.server.get('/health', async () => ({
       status: 'ok',
       timestamp: new Date().toISOString(),
       config: {
         injection: {
           enabled: this.config.input.detectInjection,
+          sensitivity: this.config.input.injectionSensitivity,
           action: this.config.input.injectionAction,
         },
         pii: {
           enabled: this.config.output.detectPII,
+          types: this.config.output.piiTypes,
           action: this.config.output.piiAction,
+          minConfidence: this.config.output.piiMinConfidence ?? 'medium',
         },
       },
     }));
 
-    // Models endpoint (for OpenAI compatibility)
     this.server.get('/v1/models', async () => ({
       object: 'list',
-      data: [
-        { id: 'gpt-4o', object: 'model', created: Date.now(), owned_by: 'openai' },
-        { id: 'gpt-4o-mini', object: 'model', created: Date.now(), owned_by: 'openai' },
-        { id: 'gpt-4-turbo', object: 'model', created: Date.now(), owned_by: 'openai' },
-        { id: 'claude-3-opus-20240229', object: 'model', created: Date.now(), owned_by: 'anthropic' },
-        { id: 'claude-3-sonnet-20240229', object: 'model', created: Date.now(), owned_by: 'anthropic' },
-        { id: 'claude-3-haiku-20240307', object: 'model', created: Date.now(), owned_by: 'anthropic' },
-      ],
+      data: KNOWN_MODELS.map((m) => ({ id: m.id, object: 'model', created: 0, owned_by: m.owned_by })),
     }));
 
-    // Register chat completions route
     registerChatCompletionsRoute(this.server, this.config);
   }
 
@@ -188,7 +172,6 @@ export class Gateway {
           });
         }
 
-        // Fastify validation errors
         if ('validation' in error) {
           return reply.status(400).send({
             error: {
@@ -199,8 +182,6 @@ export class Gateway {
           });
         }
 
-        // Log unexpected errors
-        console.error('Unexpected error:', error);
         request.log.error(error, 'Unexpected error');
 
         return reply.status(500).send({
@@ -215,14 +196,23 @@ export class Gateway {
   }
 
   async start(): Promise<void> {
+    for (const warning of configWarnings(this.config)) {
+      console.warn(`[Gateway] Warning: ${warning}`);
+    }
     try {
       await this.server.listen({
         port: this.config.port,
         host: this.config.host,
       });
-      console.log(`[Gateway] Running on http://${this.config.host}:${this.config.port}`);
+      const address = this.server.addresses()[0];
+      const shown = address ? `http://${address.address}:${address.port}` : `http://${this.config.host}:${this.config.port}`;
+      console.log(`[Gateway] Running on ${shown}`);
       console.log(`[Gateway] POST /v1/chat/completions - OpenAI-compatible chat API`);
       console.log(`[Gateway] GET /health - Health check endpoint`);
+      console.log(
+        `[Gateway] Injection: ${this.config.input.detectInjection ? `${this.config.input.injectionSensitivity} sensitivity, action=${this.config.input.injectionAction}` : 'disabled'}` +
+          ` | PII: ${this.config.output.detectPII ? `${this.config.output.piiTypes.join(',')}, action=${this.config.output.piiAction}` : 'disabled'}`
+      );
     } catch (err) {
       this.server.log.error(err);
       throw err;
@@ -242,6 +232,15 @@ export class Gateway {
   }
 }
 
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 // =============================================================================
 // Factory Function
 // =============================================================================
@@ -255,33 +254,20 @@ export async function createGateway(config: Partial<GatewayConfig> = {}): Promis
 // =============================================================================
 
 async function main(): Promise<void> {
-  const config: Partial<GatewayConfig> = {
-    port: parseInt(process.env.GATEWAY_PORT || '3000', 10),
-    host: process.env.GATEWAY_HOST || '0.0.0.0',
-    apiKey: process.env.GATEWAY_API_KEY,
-    logging: process.env.GATEWAY_LOGGING !== 'false',
-    internalLLM: {
-      apiKey: process.env.OPENAI_API_KEY,
-      model: process.env.GATEWAY_REPHRASE_MODEL || 'gpt-4o-mini',
-    },
-    input: {
-      detectInjection: process.env.GATEWAY_DETECT_INJECTION !== 'false',
-      injectionSensitivity: (process.env.GATEWAY_INJECTION_SENSITIVITY as 'low' | 'medium' | 'high') || 'medium',
-      injectionAction: (process.env.GATEWAY_INJECTION_ACTION as 'block' | 'rephrase' | 'log') || 'rephrase',
-      logInput: process.env.GATEWAY_LOG_INPUT !== 'false',
-    },
-    output: {
-      detectPII: process.env.GATEWAY_DETECT_PII !== 'false',
-      piiTypes: (process.env.GATEWAY_PII_TYPES?.split(',') as any) || ['email', 'phone', 'ssn', 'credit_card'],
-      piiAction: (process.env.GATEWAY_PII_ACTION as 'block' | 'redact' | 'log') || 'redact',
-      logOutput: process.env.GATEWAY_LOG_OUTPUT !== 'false',
-    },
-  };
+  let config: Partial<GatewayConfig>;
+  try {
+    config = configFromEnv();
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      console.error(`[Gateway] ${err.message}`);
+      process.exit(2);
+    }
+    throw err;
+  }
 
   const gateway = await createGateway(config);
   await gateway.start();
 
-  // Graceful shutdown
   const shutdown = async () => {
     console.log('\n[Gateway] Shutting down...');
     await gateway.stop();
@@ -292,8 +278,9 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
 }
 
-// Run if executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run if executed directly (node dist/index.mjs, or via bin/gateway.js which
+// sets EVIDENTAI_GATEWAY_MAIN).
+if (process.env.EVIDENTAI_GATEWAY_MAIN === '1' || import.meta.url === `file://${process.argv[1]}`) {
   main().catch((err) => {
     console.error('Failed to start gateway:', err);
     process.exit(1);
@@ -305,13 +292,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 // =============================================================================
 
 export { Gateway as default };
+export { DEFAULT_CONFIG, configFromEnv, resolveConfig, configWarnings, ConfigError } from './config.js';
 export type {
   GatewayConfig,
   InputPipelineConfig,
   OutputPipelineConfig,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatCompletionChoice,
   ChatMessage,
+  ToolCall,
+  ToolDefinition,
+  ToolChoice,
+  FinishReason,
   LLMProviderConfig,
   PIIEntityType,
   PIIMatch,

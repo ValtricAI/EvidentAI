@@ -14,23 +14,52 @@ import type { InjectionCategory, PIIEntityType, PIIMatch, Severity, Confidence }
 // OpenAI-Compatible API Types
 // =============================================================================
 
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/** A content part in the OpenAI array content format. */
+export interface ContentPart {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
+}
+
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'function' | 'tool';
-  content: string | null;
+  role: 'system' | 'developer' | 'user' | 'assistant' | 'function' | 'tool';
+  /** Text, an array of content parts, or null for assistant tool-call-only turns. */
+  content: string | ContentPart[] | null;
   name?: string;
+  /** Required on `tool` role messages */
+  tool_call_id?: string;
+  refusal?: string | null;
   function_call?: {
     name: string;
     arguments: string;
   };
-  tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: {
-      name: string;
-      arguments: string;
-    };
-  }>;
+  tool_calls?: ToolCall[];
 }
+
+export interface ToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+    strict?: boolean;
+  };
+}
+
+export type ToolChoice =
+  | 'none'
+  | 'auto'
+  | 'required'
+  | { type: 'function'; function: { name: string } };
 
 export interface ChatCompletionRequest {
   model: string;
@@ -39,33 +68,41 @@ export interface ChatCompletionRequest {
   top_p?: number;
   n?: number;
   stream?: boolean;
+  stream_options?: Record<string, unknown>;
   stop?: string | string[];
   max_tokens?: number;
+  max_completion_tokens?: number;
   presence_penalty?: number;
   frequency_penalty?: number;
   logit_bias?: Record<string, number>;
+  logprobs?: boolean;
+  top_logprobs?: number;
+  seed?: number;
   user?: string;
+  response_format?: Record<string, unknown>;
+  parallel_tool_calls?: boolean;
+  service_tier?: string;
+  store?: boolean;
+  metadata?: Record<string, unknown>;
   functions?: Array<{
     name: string;
     description?: string;
     parameters?: Record<string, unknown>;
   }>;
   function_call?: 'none' | 'auto' | { name: string };
-  tools?: Array<{
-    type: 'function';
-    function: {
-      name: string;
-      description?: string;
-      parameters?: Record<string, unknown>;
-    };
-  }>;
-  tool_choice?: 'none' | 'auto' | { type: 'function'; function: { name: string } };
+  tools?: ToolDefinition[];
+  tool_choice?: ToolChoice;
+  /** Any other OpenAI field is forwarded untouched. */
+  [key: string]: unknown;
 }
+
+export type FinishReason = 'stop' | 'length' | 'function_call' | 'tool_calls' | 'content_filter' | null;
 
 export interface ChatCompletionChoice {
   index: number;
   message: ChatMessage;
-  finish_reason: 'stop' | 'length' | 'function_call' | 'tool_calls' | 'content_filter' | null;
+  finish_reason: FinishReason;
+  logprobs?: unknown;
 }
 
 export interface ChatCompletionUsage {
@@ -166,6 +203,11 @@ export interface OutputPipelineConfig {
   piiAllowValues?: string[];
   /** Regular expressions whose matches are not PII */
   piiAllowPatterns?: string[];
+  /**
+   * Also scan (and redact inside) tool call arguments. Off by default because
+   * redacting JSON arguments can break the calling application.
+   */
+  piiScanToolArguments?: boolean;
   /** Enable output logging */
   logOutput: boolean;
 }

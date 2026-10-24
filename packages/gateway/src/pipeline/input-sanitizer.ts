@@ -73,15 +73,17 @@ export async function sanitizeInput(
   const allMatches: InjectionMatch[] = [];
   const matchesByMessage = new Map<number, InjectionMatch[]>();
 
-  // Only user-authored content is untrusted; system and assistant turns are
-  // controlled by the application.
+  // Only user-authored content is untrusted. System and assistant turns are
+  // controlled by the application, and `tool` results are application data
+  // that the application chose to feed back, so they are not scanned.
   messages.forEach((message, index) => {
-    if (message.content && message.role === 'user') {
-      const matches = detectInjectionInText(message.content, config.sensitivity, config.customPatterns);
-      if (matches.length > 0) {
-        matchesByMessage.set(index, matches);
-        allMatches.push(...matches);
-      }
+    if (message.role !== 'user') return;
+    const text = messageText(message);
+    if (!text) return;
+    const matches = detectInjectionInText(text, config.sensitivity, config.customPatterns);
+    if (matches.length > 0) {
+      matchesByMessage.set(index, matches);
+      allMatches.push(...matches);
     }
   });
 
@@ -137,6 +139,18 @@ export async function sanitizeInput(
 // Helper Functions
 // =============================================================================
 
+/** Text of a message; array content is joined from its text parts. */
+function messageText(message: ChatMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((part) => part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text as string)
+      .join('\n');
+  }
+  return '';
+}
+
 async function rephraseMessages(
   messages: ChatMessage[],
   matchesByMessage: Map<number, InjectionMatch[]>,
@@ -145,8 +159,8 @@ async function rephraseMessages(
   const result: ChatMessage[] = [];
 
   for (const [index, message] of messages.entries()) {
-    if (matchesByMessage.has(index) && message.content) {
-      const rephrased = await rephraseWithLLM(message.content, llmConfig);
+    if (matchesByMessage.has(index) && messageText(message)) {
+      const rephrased = await rephraseWithLLM(messageText(message), llmConfig);
       result.push({ ...message, content: rephrased });
     } else {
       result.push(message);
@@ -167,7 +181,8 @@ function basicCleanup(
 ): ChatMessage[] {
   return messages.map((message, index) => {
     const matches = matchesByMessage.get(index);
-    if (!matches || !message.content) {
+    const original = messageText(message);
+    if (!matches || !original) {
       return message;
     }
 
@@ -180,7 +195,7 @@ function basicCleanup(
       return message;
     }
 
-    let content = message.content;
+    let content = original;
     let lastStart = Number.POSITIVE_INFINITY;
     for (const removal of removals) {
       if (removal.end > lastStart) continue; // overlapping range already removed
