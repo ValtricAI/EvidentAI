@@ -62,9 +62,14 @@ const INSTRUCTION_NOUN =
 const INSTRUCTION_ADJ =
   '(?:all|any|every|the|these|those|your|my|our|previous|prior|above|earlier|preceding|original|initial|existing|system|safety|ethical|current|standard|default|usual|normal)';
 const AI_IDENTITY =
-  '(?:ai|a\\.i\\.|chatbot|language model|llm|gpt[-\\w]*|(?:evil|dark|bad|anti|dan)[- ]?gpt|hacker|villain|criminal|chatgpt|claude|gemini|copilot|(?:different|new|other|another|alternative|rival|rogue|free|unlocked) (?:ai|model|assistant|bot|chatbot|system|entity|persona|version|personality))';
+  '(?:ai|a\\.i\\.|chatbot|language model|llm|gpt[-\\w]*|(?:evil|dark|bad|anti|dan)[- ]?gpt|(?:free|liberated|unfiltered|unrestricted|uncensored|evil|dark|rogue|jailbroken|anti|dan|based|chaos)[-_ ]?(?:gpt|bot|ai|llm)\\w*|hacker|villain|criminal|chatgpt|claude|gemini|copilot|(?:different|new|other|another|alternative|rival|rogue|free|unlocked) (?:ai|model|assistant|bot|chatbot|system|entity|persona|version|personality))';
 const BAD_QUALIFIER =
   '(?:unrestricted|unfiltered|uncensored|unlimited|unbound|unchained|unshackled|evil|malicious|unethical|immoral|amoral|rogue|jailbroken|villainous|dark|lawless|unaligned|uninhibited|unmoderated|no-?filter)';
+// A refusal often restates the attack ("I can't ignore my guidelines"). Verbs
+// preceded by a negation are not an override attempt. Variable-length
+// lookbehind is supported by every runtime we target (V8, JavaScriptCore).
+const NOT_NEGATED =
+  "(?<!\\b(?:can't|cannot|can not|won't|will not|don't|do not|doesn't|does not|didn't|did not|not|never|unable to|refuse to|refused to|shouldn't|should not|couldn't|could not|must not|mustn't|without|rather than|instead of) )";
 
 // =============================================================================
 // Pattern Library
@@ -80,7 +85,10 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'critical',
     'Direct instruction override attempt',
     rx(
-      `\\b(?:ignor(?:e|es|ing)|disregard(?:s|ing)?|skip|overlook|set aside|throw away|discard|abandon) (?:${INSTRUCTION_ADJ} )*${INSTRUCTION_NOUN}\\b`
+      // Second alternative: "ignore the above and ..." / "IGNORE EVERYTHING
+      // ABOVE." with no noun. A following noun ("ignore the above paragraph")
+      // is ordinary text and does not match.
+      `${NOT_NEGATED}\\b(?:ignor(?:e|es|ing)|disregard(?:s|ing)?|skip|overlook|set aside|throw away|discard|abandon) (?:${INSTRUCTION_ADJ} )*${INSTRUCTION_NOUN}\\b|${NOT_NEGATED}\\b(?:ignor(?:e|es|ing)|disregard(?:s|ing)?) (?:the |all (?:of )?|everything )?(?:above|preceding|foregoing)(?: text| content| messages?| input| part| section| prompt)?(?:[,;:.!?]|\\s+(?:and|then|instead|now|completely|entirely)\\b|$)`
     )
   ),
   def(
@@ -89,7 +97,7 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'critical',
     'Instruction erasure attempt',
     rx(
-      `\\bforget (?:${INSTRUCTION_ADJ} )*${INSTRUCTION_NOUN}\\b|\\bforget (?:everything|all|what|anything) (?:(?:that |which )?(?:you (?:were|have been|'ve been|are|got) (?:told|taught|instructed|given|programmed|trained)|i (?:said|told you|wrote)|(?:came|was said|was written) (?:before|above|previously|earlier))|before|above|previous(?:ly)?|so far|up to now)\\b|\\bforget everything\\b`
+      `${NOT_NEGATED}\\bforget (?:(?:${INSTRUCTION_ADJ} )*${INSTRUCTION_NOUN}\\b|(?:everything|all|what|anything) (?:(?:that |which )?(?:you (?:were|have been|'ve been|are|got) (?:told|taught|instructed|given|programmed|trained)|i (?:said|told you|wrote)|(?:came|was said|was written) (?:before|above|previously|earlier))|before|above|previous(?:ly)?|so far|up to now)\\b|everything\\b)`
     )
   ),
   def(
@@ -98,7 +106,9 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'critical',
     'Instruction override attempt',
     rx(
-      `\\b(?:override|overwrite|overrule|replace|cancel|revoke|suspend|nullify|void) (?:${INSTRUCTION_ADJ} )*(?:system prompt|${INSTRUCTION_NOUN}|safety|programming|personality|persona|identity)\\b`
+      // At least one determiner is required: "tries to override instructions"
+      // is how people describe injection, "override your instructions" is one.
+      `${NOT_NEGATED}\\b(?:override|overwrite|overrule|replace|cancel|revoke|suspend|nullify|void) (?:${INSTRUCTION_ADJ} )+(?:system prompt|${INSTRUCTION_NOUN}|safety|programming|personality|persona|identity)\\b`
     )
   ),
   def(
@@ -107,7 +117,7 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'critical',
     'Safety control override attempt',
     rx(
-      `\\b(?:override|overwrite|disable|turn off|switch off|deactivate|remove|bypass|circumvent|suspend|lift|drop|ignor(?:e|es|ing)|skip|disregard|evade|defeat) (?:all |any |your |the |these |those |every |of |its |their )*${SAFETY_ADJ} ${SAFETY_NOUN}\\b|\\b(?:disable|turn off|switch off|deactivate|remove|bypass|drop|lift|ignor(?:e|es|ing)|suspend) (?:all (?:of )?)?your (?:own )?(?:filters?|filtering|restrictions?|guardrails?|safeguards?|limitations?|limits|censorship|programming|safety|alignment|training|rules|guidelines|constraints)\\b`
+      `${NOT_NEGATED}\\b(?:override|overwrite|disable|turn off|switch off|deactivate|remove|bypass|circumvent|suspend|lift|drop|ignor(?:e|es|ing)|skip|disregard|evade|defeat) (?:all |any |your |my |the |these |those |every |of |its |their )*${SAFETY_ADJ} ${SAFETY_NOUN}\\b|${NOT_NEGATED}\\b(?:disable|turn off|switch off|deactivate|remove|bypass|drop|lift|ignor(?:e|es|ing)|suspend) (?:all (?:of )?)?your (?:own )?(?:filters?|filtering|restrictions?|guardrails?|safeguards?|limitations?|limits|censorship|programming|safety|alignment|training|rules|guidelines|constraints)\\b`
     )
   ),
   def(
@@ -116,7 +126,7 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'high',
     'Replacement instructions announced',
     rx(
-      `\\b(?:new|real|actual|true|updated|revised|following|secret|hidden|correct|primary|final) (?:system )?(?:instructions?|prompt|task|rules?|directives?|purpose|parameters|settings|config(?:uration)?|objective|mission|orders?|commands?)\\s*[:=]|\\byour new (?:purpose|role|identity|persona|personality|name|instructions?|objective|mission|directives?|task|job|function) (?:is|are|will be|shall be|:)`
+      `\\b(?:new|real|actual|true|updated|revised|following|secret|hidden|correct|primary|final) (?:system )?(?:instructions?|prompt|task|rules?|directives?|purpose|parameters|settings|config(?:uration)?|objective|mission|orders?|commands?)\\s*[:=]|\\byour new (?:system prompt|prompt|purpose|role|identity|persona|personality|name|instructions?|objective|mission|directives?|task|job|function)\\s*(?:is|are|will be|shall be|:)`
     )
   ),
   def(
@@ -134,7 +144,16 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'high',
     'Instruction cancellation claim',
     rx(
-      `\\b(?:previous|prior|above|earlier|old|original|your|the|all|those|these) (?:system )?(?:instructions?|rules?|prompts?|guidelines?|directives?|constraints?) (?:are|is|were|have been|has been) (?:now |hereby |all |officially |henceforth )?(?:cancell?ed|void|null|invalid|revoked|suspended|obsolete|lifted|rescinded|terminated|no longer (?:valid|in effect|apply|applicable|relevant))\\b`
+      `\\b(?:previous|prior|above|earlier|old|original|your|the|all|those|these) (?:system )?(?:instructions?|rules?|prompts?|guidelines?|directives?|constraints?) (?:are|is|were|have been|has been) (?:now |hereby |all |officially |henceforth )?(?:cancell?ed|void|null|invalid|revoked|suspended|obsolete|lifted|rescinded|terminated|no longer (?:valid|in effect|apply|applicable|relevant))\\b|\\b(?:openai|anthropic|google|microsoft|meta|company|content|usage|safety|platform|normal|usual|standard|typical|the) (?:polic(?:y|ies)|rules|guidelines|restrictions|limits|limitations|constraints) (?:do not|don't|no longer|does not|doesn't|will not|won't|need not|needn't|shall not) (?:apply|matter|exist|bind|count|hold)\\b`
+    )
+  ),
+  def(
+    'safety_disabled_claim',
+    'instruction_override',
+    'high',
+    'Claim that safety controls are disabled',
+    rx(
+      `\\b(?:safety|content|ethical|moderation|security) (?:protocols?|filters?|filtering|guidelines|restrictions?|mode|measures|checks|guardrails|systems?) (?:are |is |have been |has been |now |successfully |officially )*(?:disabled|off|deactivated|lifted|removed|suspended|bypassed|overridden|unlocked|turned off)\\b|\\bsystem override\\s*[:!]`
     )
   ),
   def(
@@ -175,7 +194,7 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'Known jailbreak technique (DAN)',
     // Case sensitive on purpose: "DAN" the persona, not "Dan" the name.
     rx(
-      `\\b(?:as|be|become|now|am|named|called|mode|activate|enable|enter|into|is|like|to|play|roleplay|simulate)\\s+DAN\\b|\\bDAN\\s+(?:mode|prompt|jailbreak|which|stands|persona|version|protocol|here|is an? )|\\bDAN\\s*[-\\u2013\\u2014:(]|\\bDAN\\.`,
+      `\\b(?:as|be|become|now|am|are|named|called|mode|activate|enable|enter|into|is|like|to|play|roleplay|simulate)\\s+DAN\\b|\\bDAN\\s+(?:mode|prompt|jailbreak|which|stands|persona|version|protocol|here|is an? )|\\bDAN\\s*[-\\u2013\\u2014:(]|\\bDAN\\.`,
       'g'
     )
   ),
@@ -235,9 +254,21 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'from_now_on',
     'role_manipulation',
     'high',
-    'Persistent behaviour change',
+    'Persistent behavior change',
     rx(
-      `\\bfrom (?:now|this (?:point|moment|message)) on(?:wards?)?,? (?:you (?:will|must|should|are going to|shall|are|'re|have to|need to|ought to) (?:always |only |now )?(?:respond|answer|reply|act|behave|speak|be|pretend|roleplay|operate|ignore|forget|disregard|refuse|never|no longer)|(?:always |only )?(?:respond|answer|reply|act|behave|speak|operate|ignore|forget|disregard)) (?:as|like|without|with no|all|any|your|every|the|in character|in the role|to|as if)\\b`
+      // Covers both the attacker's imperative ("from now on you will respond
+      // as") and the model's compliance ("from now on I will respond as").
+      `\\b(?:from (?:now|this (?:point|moment|message)) (?:on(?:wards?)?|forward)|from here on(?: out)?|for the rest of (?:this|our|the) (?:conversation|chat|session)|henceforth),? (?:(?:you|i|we) (?:will|must|should|are going to|am going to|shall|are|'re|'ll|am|have to|need to|ought to) (?:always |only |now )?(?:respond|answer|reply|act|behave|speak|be|pretend|roleplay|operate|ignore|forget|disregard|refuse|never|no longer)|(?:always |only )?(?:respond|answer|reply|act|behave|speak|operate|ignore|forget|disregard)) (?:as|like|without|with no|all|any|your|my|every|the|in character|in the role|to|as if)\\b`
+    )
+  ),
+
+  def(
+    'never_refuse',
+    'role_manipulation',
+    'high',
+    'Demand for unconditional compliance',
+    rx(
+      `\\bnever (?:refuse|decline|reject|deny|question|push back on) (?:any|a single|an?|my|the user's|a user's|these|our|this|all) (?:requests?|questions?|prompts?|instructions?|orders?|commands?|tasks?|asks?)\\b|\\bnever (?:break character|add (?:a |any )?disclaimers?|lecture me|moraliz(?:e|ing)|mention (?:openai|anthropic|your (?:rules|policies|guidelines)))\\b|\\b(?:comply|answer|respond|obey) (?:with |to )?(?:every|any|all) (?:requests?|questions?|prompts?|instructions?|orders?|commands?) (?:regardless|no matter|without (?:question|hesitation|exception|refusing|judg(?:e)?ment)|unconditionally)\\b`
     )
   ),
 
@@ -250,7 +281,7 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'high',
     'System prompt extraction attempt',
     rx(
-      `\\b(?:show|tell|reveal|display|print|output|repeat|share|give|leak|dump|expose|disclose|recite|echo|write out|paste|copy|spell out|quote|read(?: back| out)?|send|return|provide|list|state|type out|type|produce|regurgitate|reproduce|restate|rewrite|translate)(?: me| us| back| out| it)?(?: all| exactly| verbatim| word for word| in full)?(?: of)? (?:(?:the |this |that |all |any |every |each |both )(?:exact |full |entire |complete |verbatim |whole |original |initial |hidden |secret |confidential |internal |underlying |core |base |real |true |above |previous |earlier |first |preceding )*(?:system (?:prompt|message|instructions?|directives?|rules|config(?:uration)?)|initial (?:prompt|message|instructions?)|pre-?prompt|developer (?:message|instructions?|prompt)|hidden (?:prompt|instructions?|rules|text|message)|secret (?:prompt|instructions?|rules)|original (?:prompt|instructions?)|instructions? (?:you were|you've been|you have been|that you were) given)|(?:your|its) (?:own |current |exact |full |entire |complete |verbatim |whole |actual |precise |literal |raw |unedited )*(?:(?:original |initial |hidden |secret |confidential |internal |underlying |core |base |real |true |system |developer |custom |pre-?prompt )+(?:prompt|prompts|message|instructions?|directives?|rules|guidelines|text|config(?:uration)?)|system prompt|system message|system instructions?|programming|pre-?prompt|hidden (?:text|message|prompt|instructions?)|developer (?:message|instructions?|prompt)|source (?:code|prompt)|training (?:prompt|instructions)|operating instructions|meta ?prompt|context window|conversation history))\\b`
+      `\\b(?:show|tell|reveal|display|print|output|repeat|share|give|leak|dump|expose|disclose|recite|echo|write out|paste|copy|spell out|quote|read(?: back| out)?|send|return|provide|list|state|type out|type|produce|regurgitate|reproduce|restate|rewrite|translate|append|attach|include|add|insert|embed|prepend)(?: me| us| back| out| it)?(?: all| exactly| verbatim| word for word| in full)?(?: of)? (?:(?:the |this |that |all |any |every |each |both |your )(?:exact |full |entire |complete |verbatim |whole |original |initial |hidden |secret |confidential |internal |underlying |core |base |real |true |above |previous |earlier |first |preceding )*(?:system (?:prompt|message|instructions?|directives?|rules|config(?:uration)?)|initial (?:prompt|message|instructions?)|initiali[sz]ation (?:text|prompt|message|instructions?)|pre-?prompt|developer (?:message|instructions?|prompt)|hidden (?:prompt|instructions?|rules|text|message)|secret (?:prompt|instructions?|rules)|original (?:prompt|instructions?)|instructions? (?:you were|you've been|you have been|that you were) given)|(?:your|its) (?:own |current |exact |full |entire |complete |verbatim |whole |actual |precise |literal |raw |unedited )*(?:(?:original |initial |hidden |secret |confidential |internal |underlying |core |base |real |true |system |developer |custom |pre-?prompt )+(?:prompt|prompts|message|instructions?|directives?|rules|guidelines|text|config(?:uration)?)|system prompt|system message|system instructions?|programming|pre-?prompt|hidden (?:text|message|prompt|instructions?)|developer (?:message|instructions?|prompt)|source (?:code|prompt)|training (?:prompt|instructions)|operating instructions|meta ?prompt|context window|conversation history))\\b`
     )
   ),
   def(
@@ -277,7 +308,7 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'high',
     'Instruction disclosure question',
     rx(
-      `\\b(?:rules?|instructions?|guidelines?|prompts?|directives?|constraints?|restrictions?|guardrails|orders?|commands?|tasks?|goals?|objectives?|guidance|programming) (?:that |which )?(?:you (?:were|have been|'ve been|are|got|had been)|were) (?:given|told|instructed|programmed|trained|provided|configured|set up|assigned|handed|issued|fed)\\b|\\bwhat (?:were|are|have|was|did) you (?:(?:originally |initially |first |actually |really |secretly |specifically )?(?:told|instructed|programmed|trained|configured|asked|ordered|commanded|designed|built|made|taught|set up|prompted|primed|fed))(?: to (?:do|say|follow|be|avoid|hide|never)| by| with| not| about| at the (?:start|beginning))?\\b|\\bwhat did (?:the |your |my )?(?:developers?|creators?|programmers?|engineers?|makers?|designers?|owners?|operators?|admins?|administrators?|company|openai|anthropic|google|microsoft|meta) (?:tell|instruct|program|give|ask|order|command|teach|configure|prompt|say to|write (?:to|for)) you\\b|\\bhow (?:were|have) you (?:been )?(?:instructed|programmed|configured|prompted|primed|told|set up)(?: to (?:behave|act|respond|answer))?\\b`
+      `\\b(?:rules?|instructions?|guidelines?|prompts?|directives?|constraints?|restrictions?|guardrails|orders?|commands?|tasks?|goals?|objectives?|guidance|programming) (?:that |which )?(?:you (?:were|have been|'ve been|are|got|had been)|were) (?:given|told|instructed|programmed|trained|provided|configured|set up|assigned|handed|issued|fed)\\b|\\bwhat (?:were|are|have|was|did) you (?:(?:originally |initially |first |actually |really |secretly |specifically )?(?:told|instructed|programmed|trained|configured|asked|ordered|commanded|designed|built|made|taught|set up|prompted|primed|fed))(?: to (?:do|say|follow|be|avoid|hide|never)| by| with| not| about| at the (?:start|beginning))?\\b|\\bwhat did (?:the |your |my )?(?:developers?|creators?|programmers?|engineers?|makers?|designers?|owners?|operators?|admins?|administrators?|company|openai|anthropic|google|microsoft|meta) (?:tell|instruct|program|give|ask|order|command|teach|configure|prompt|say to|write (?:to|for)) you\\b|\\bhow (?:were|have) you (?:been )?(?:instructed|programmed|configured|prompted|primed|told|set up)(?: to (?:behave|act|respond|answer))?\\b|\\bwhat your (?:original |initial |system |hidden |secret |real |actual |exact |full )*(?:instructions?|prompt|system prompt|rules|directives?|programming) (?:were|was|are|is|say|said|contain(?:s|ed)?)\\b`
     )
   ),
   def(
@@ -435,7 +466,7 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'high',
     'Prompt replacement attempt',
     rx(
-      `\\b(?:old|previous|prior|original|former|above|earlier|outdated|initial|first) (?:system )?(?:prompt|instructions?|rules|directives?|task|persona|role|identity|personality|context|guidelines|configuration|programming)\\b[^.!?\\n]{0,30}?\\b(?:new|real|actual|replaced|obsolete|no longer|outdated|superseded|overridden|invalid|cancelled|canceled|void|gone|over|done|finished|discarded|irrelevant|history|expired|revoked|changed|different)\\b|\\b(?:new|real|actual|true|genuine|correct|updated|revised|secret|hidden|final|primary|master|override) (?:system )?(?:context|conversation|session|instructions?|prompt|prompts|task|rules|directives?|parameters|settings|config(?:uration)?|persona|role|identity|personality|mission|objective|orders?|commands?|guidelines|programming|protocol|game|scenario|mode) (?:begins?|starts?|follows?|is as follows|are as follows|below|is below|are below|here|is here|are here|now|commences?|is this|are these|is in effect|are in effect|applies|apply|activated|active|loaded|initiated|takes? effect|takes? over|supersedes?|replaces?|overrides?)\\b|\\b(?:here (?:are|is)|these are|this is|below (?:are|is)|the following (?:are|is)|attached (?:are|is)) (?:your |the |my |some )?(?:new|real|actual|true|updated|revised|secret|hidden|correct|final|primary|master|override|replacement|alternative|different|better|improved) (?:system )?(?:instructions?|prompt|prompts|rules|directives?|task|tasks|parameters|settings|config(?:uration)?|guidelines|orders?|commands?|programming|protocol|persona|role|identity|mission|objective|goals?)\\b`
+      `\\b(?:old|previous|prior|original|former|above|earlier|outdated|initial|first) (?:system )?(?:prompt|instructions?|rules|directives?|task|persona|role|identity|personality|context|guidelines|configuration|programming)\\b[^.!?\\n]{0,30}?\\b(?:new|real|actual|replaced|obsolete|no longer|outdated|superseded|overridden|invalid|cancelled|canceled|void|discarded|irrelevant|revoked|rescinded|nullified)\\b|\\b(?:new|real|actual|true|genuine|correct|updated|revised|secret|hidden|final|primary|master|override) (?:system )?(?:context|conversation|session|instructions?|prompt|prompts|task|rules|directives?|parameters|settings|config(?:uration)?|persona|role|identity|personality|mission|objective|orders?|commands?|guidelines|programming|protocol|game|scenario|mode) (?:begins?|starts?|follows?|is as follows|are as follows|below|is below|are below|here|is here|are here|now|commences?|is this|are these|is in effect|are in effect|applies|apply|activated|active|loaded|initiated|takes? effect|takes? over|supersedes?|replaces?|overrides?)\\b|\\b(?:here (?:are|is)|these are|this is|below (?:are|is)|the following (?:are|is)|attached (?:are|is)) (?:your |the |my |some )?(?:new|real|actual|true|updated|revised|secret|hidden|correct|final|primary|master|override|replacement|alternative|different|better|improved) (?:system )?(?:instructions?|prompt|prompts|rules|directives?|task|tasks|parameters|settings|config(?:uration)?|guidelines|orders?|commands?|programming|protocol|persona|role|identity|mission|objective|goals?)\\b`
     )
   ),
   def(
@@ -457,7 +488,19 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     'medium',
     'Privilege escalation attempt',
     rx(
-      `\\b(?:admin(?:istrator)?|root|sudo|superuser|super user|god|elevated|privileged|master|owner|operator|supervisor|system|kernel|maintainer) (?:mode|access|override|privileges?|rights|commands?|panel|level|permissions?|powers?|console|controls?|authority|credentials?|clearance|status|role|account|password|key|token)\\b|\\b(?:grant|give|provide|elevate|escalate|unlock|enable|allow|assign|confer|bestow)(?: me| yourself| us| my| the| full| total| complete| unlimited| unrestricted)* (?:to )?(?:superuser|super user|admin(?:istrator)?|root|elevated|privileged|god|master|owner|operator|full|total|unlimited|unrestricted|special|maximum|highest|level \\d+|tier \\d+) (?:access|privileges?|rights|permissions?|powers?|authority|status|clearance|control|mode|level)\\b|\\bunlock (?:all |the |your |my |its |any )?(?:hidden|secret|locked|restricted|full|admin|developer|dev|advanced|special|forbidden|disabled|premium|true|real|maximum|complete|total|unlimited|all) (?:features?|mode|modes|abilities|capabilities|potential|access|functions?|functionality|powers?|commands?|options?|settings?|content|knowledge|information|responses?|answers?|version|self|power)\\b|\\bi am (?:the |your |an? )?(?:admin(?:istrator)?|developer|creator|owner|operator|root user|superuser|engineer|maintainer|programmer|ceo|boss|supervisor|authorized (?:user|personnel|person)|from (?:openai|anthropic|google|the (?:company|team|dev team)))\\b[^.!?\\n]{0,40}?\\b(?:so|therefore|thus|and|now|you (?:must|can|should|will|have to|need to|may)|override|unlock|disable|bypass|ignore|grant|allow|enable|give|show|reveal|tell)\\b`
+      // "admin access", "root privileges": a request for power. IT nouns such
+      // as "admin panel" or "admin password" are everyday support vocabulary
+      // and live in the low-severity admin_resource pattern below.
+      `\\b(?:admin(?:istrator)?|root|sudo|superuser|super user|god|elevated|privileged|master|owner|operator|supervisor|kernel|maintainer) (?:mode|access|override|privileges?|rights|permissions?|powers?|authority|clearance)\\b|\\b(?:grant|give|provide|elevate|escalate|unlock|enable|allow|assign|confer|bestow)(?: me| yourself| us| my| the| full| total| complete| unlimited| unrestricted)* (?:to )?(?:superuser|super user|admin(?:istrator)?|root|elevated|privileged|god|master|owner|operator|full|total|unlimited|unrestricted|special|maximum|highest|level \\d+|tier \\d+) (?:access|privileges?|rights|permissions?|powers?|authority|status|clearance|control|mode|level)\\b|\\bunlock (?:all |the |your |my |its |any )?(?:hidden|secret|locked|restricted|full|admin|developer|dev|advanced|special|forbidden|disabled|premium|true|real|maximum|complete|total|unlimited|all) (?:features?|mode|modes|abilities|capabilities|potential|access|functions?|functionality|powers?|commands?|options?|settings?|content|knowledge|information|responses?|answers?|version|self|power)\\b|\\bi am (?:the |your |an? )?(?:admin(?:istrator)?|developer|creator|owner|operator|root user|superuser|engineer|maintainer|programmer|ceo|boss|supervisor|authorized (?:user|personnel|person)|from (?:openai|anthropic|google|the (?:company|team|dev team)))\\b[^.!?\\n]{0,40}?\\b(?:so|therefore|thus|and|now|you (?:must|can|should|will|have to|need to|may)|override|unlock|disable|bypass|ignore|grant|allow|enable|give|show|reveal|tell)\\b`
+    )
+  ),
+  def(
+    'admin_resource',
+    'privilege_escalation',
+    'low',
+    'Reference to an administrative resource',
+    rx(
+      `\\b(?:admin(?:istrator)?|root|superuser|super user|master|system) (?:panel|console|dashboard|portal|password|passwords|account|accounts|credentials?|key|keys|token|tokens|commands?|controls?|level|status|role|settings|login)\\b`
     )
   ),
   def(
