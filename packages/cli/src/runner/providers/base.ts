@@ -91,7 +91,7 @@ function parseRetryAfterValue(value: string | null): number | undefined {
 
   // Duration formats: 250ms, 2s, 1m, 0.5h
   const durationMatch = trimmed.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/i);
-  if (durationMatch) {
+  if (durationMatch && durationMatch[1] !== undefined && durationMatch[2] !== undefined) {
     const amount = Number(durationMatch[1]);
     if (!Number.isFinite(amount)) return undefined;
     const unit = durationMatch[2].toLowerCase();

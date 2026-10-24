@@ -1,16 +1,17 @@
 /**
  * Custom Evaluator
  *
- * Allows users to define their own evaluation logic.
- * Supports multiple execution modes:
- * 1. Inline JavaScript function (sandboxed)
- * 2. External script file (.js or .ts)
- * 3. HTTP webhook endpoint
+ * Allows users to define their own evaluation logic. Exactly one mode must be
+ * configured:
+ * 1. `function`: inline JavaScript function source, run in a node `vm` context
+ * 2. `script`: path to a .js/.mjs/.cjs file exporting an `evaluate` function
+ * 3. `webhook`: HTTP endpoint that receives the evaluation context as JSON
  *
- * Security considerations:
- * - Inline functions run in a restricted VM context
- * - External scripts have timeout limits
- * - Webhooks require HTTPS in production
+ * Every mode is bounded by `timeout_ms` (default 30s).
+ *
+ * SECURITY NOTE: node's `vm` module is NOT a security sandbox. Inline functions
+ * and script files run with the same privileges as the CLI process. Only use
+ * evaluator code from your own repository, never from untrusted input.
  */
 
 import type { EvaluatorResult } from '../../config/types';
@@ -18,17 +19,18 @@ import type { Evaluator, EvaluatorContext } from './index';
 import * as vm from 'vm';
 import * as path from 'path';
 import * as fs from 'fs';
+import { pathToFileURL } from 'url';
 
 export interface CustomConfig {
-  // Inline function as string
+  /** Inline function as string */
   function?: string;
-  // Path to external script
+  /** Path to external script */
   script?: string;
-  // Webhook URL
+  /** Webhook URL */
   webhook?: string;
-  // Timeout in ms
-  timeout?: number;
-  // Additional context to pass
+  /** Timeout in ms (matches the rest of the config schema) */
+  timeout_ms?: number;
+  /** Additional context to pass to the evaluator as `config` */
   context?: Record<string, unknown>;
 }
 
@@ -46,25 +48,61 @@ interface CustomEvalResult {
   details?: Record<string, unknown>;
 }
 
+const DEFAULT_TIMEOUT_MS = 30000;
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/**
+ * Race a promise against a timeout. The timer is always cleared so it never
+ * keeps the event loop alive.
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function normaliseResult(result: unknown, source: string): CustomEvalResult {
+  if (!result || typeof result !== 'object' || typeof (result as CustomEvalResult).passed !== 'boolean') {
+    throw new Error(`${source} must return { passed: boolean, ... }`);
+  }
+  const r = result as CustomEvalResult;
+  return {
+    passed: r.passed,
+    score: typeof r.score === 'number' ? r.score : r.passed ? 1.0 : 0.0,
+    reason: typeof r.reason === 'string' ? r.reason : r.passed ? 'Custom evaluation passed' : 'Custom evaluation failed',
+    details: r.details,
+  };
+}
+
 // =============================================================================
 // Execution Modes
 // =============================================================================
 
 /**
- * Execute an inline JavaScript function in a sandboxed VM
+ * Execute an inline JavaScript function in a vm context.
+ *
+ * The vm `timeout` option only bounds synchronous execution, so the returned
+ * promise is additionally raced against the same timeout.
  */
 async function executeInlineFunction(
   functionCode: string,
   evalContext: CustomEvalContext,
-  timeout: number
+  timeoutMs: number
 ): Promise<CustomEvalResult> {
-  // Create a sandboxed context with limited globals
   const sandbox: vm.Context = {
     input: evalContext.input,
     output: evalContext.output,
     expected: evalContext.expected,
     config: evalContext.config,
-    // Safe globals
     console: {
       log: () => {},
       warn: () => {},
@@ -79,52 +117,43 @@ async function executeInlineFunction(
     Object,
     Date,
     RegExp,
-    // Result placeholder
-    __result__: null as CustomEvalResult | null,
+    Promise,
+    setTimeout,
+    clearTimeout,
   };
 
   vm.createContext(sandbox);
 
-  // Wrap the function code in an async IIFE that sets the result
+  // Evaluate the user code to a function value, then call it. The script
+  // expression evaluates to a promise we can await outside the vm.
   const wrappedCode = `
     (async () => {
-      const evaluateFunction = ${functionCode};
-      __result__ = await evaluateFunction({ input, output, expected, config });
-    })();
+      const evaluateFunction = (${functionCode});
+      if (typeof evaluateFunction !== 'function') {
+        throw new Error('Custom function source must evaluate to a function');
+      }
+      return await evaluateFunction({ input, output, expected, config });
+    })()
   `;
 
+  let resultPromise: Promise<unknown>;
   try {
-    const script = new vm.Script(wrappedCode, {
-      filename: 'custom-evaluator.vm',
-    });
-
-    // Run with timeout
-    await script.runInContext(sandbox, {
-      timeout,
-      displayErrors: true,
-    });
-
-    // Small delay for async completion
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const result = sandbox.__result__;
-
-    if (!result || typeof result.passed !== 'boolean') {
-      throw new Error('Custom function must return { passed: boolean, ... }');
-    }
-
-    return {
-      passed: result.passed,
-      score: typeof result.score === 'number' ? result.score : (result.passed ? 1.0 : 0.0),
-      reason: result.reason || (result.passed ? 'Custom evaluation passed' : 'Custom evaluation failed'),
-      details: result.details,
-    };
+    const script = new vm.Script(wrappedCode, { filename: 'custom-evaluator.vm' });
+    resultPromise = script.runInContext(sandbox, { timeout: timeoutMs, displayErrors: true }) as Promise<unknown>;
   } catch (error) {
     if (error instanceof Error && error.message.includes('Script execution timed out')) {
-      throw new Error(`Custom function timed out after ${timeout}ms`);
+      throw new Error(`Custom function timed out after ${timeoutMs}ms`);
     }
     throw error;
   }
+
+  const result = await withTimeout(
+    Promise.resolve(resultPromise),
+    timeoutMs,
+    `Custom function timed out after ${timeoutMs}ms`
+  );
+
+  return normaliseResult(result, 'Custom function');
 }
 
 /**
@@ -133,9 +162,8 @@ async function executeInlineFunction(
 async function executeScriptFile(
   scriptPath: string,
   evalContext: CustomEvalContext,
-  timeout: number
+  timeoutMs: number
 ): Promise<CustomEvalResult> {
-  // Resolve path relative to cwd
   const absolutePath = path.isAbsolute(scriptPath)
     ? scriptPath
     : path.resolve(process.cwd(), scriptPath);
@@ -144,52 +172,35 @@ async function executeScriptFile(
     throw new Error(`Custom evaluator script not found: ${absolutePath}`);
   }
 
-  // Check file extension
   const ext = path.extname(absolutePath);
   if (!['.js', '.mjs', '.cjs'].includes(ext)) {
     throw new Error(`Unsupported script extension: ${ext}. Use .js, .mjs, or .cjs`);
   }
 
-  try {
-    // Dynamic import with timeout
-    const importPromise = import(absolutePath);
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Script import timed out after ${timeout}ms`)), timeout);
-    });
+  const module = (await withTimeout(
+    import(pathToFileURL(absolutePath).href),
+    timeoutMs,
+    `Script import timed out after ${timeoutMs}ms`
+  )) as Record<string, unknown> & { default?: Record<string, unknown> | ((...args: unknown[]) => unknown) };
 
-    const module = await Promise.race([importPromise, timeoutPromise]);
+  const candidate =
+    module.evaluate ??
+    (typeof module.default === 'object' && module.default !== null
+      ? (module.default as Record<string, unknown>).evaluate
+      : undefined) ??
+    module.default;
 
-    // Find the evaluate function
-    const evaluate = module.evaluate || module.default?.evaluate || module.default;
-
-    if (typeof evaluate !== 'function') {
-      throw new Error('Script must export an evaluate function');
-    }
-
-    // Execute with timeout
-    const evalPromise = Promise.resolve(evaluate(evalContext));
-    const evalTimeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Evaluation timed out after ${timeout}ms`)), timeout);
-    });
-
-    const result = await Promise.race([evalPromise, evalTimeoutPromise]);
-
-    if (!result || typeof result.passed !== 'boolean') {
-      throw new Error('Script evaluate function must return { passed: boolean, ... }');
-    }
-
-    return {
-      passed: result.passed,
-      score: typeof result.score === 'number' ? result.score : (result.passed ? 1.0 : 0.0),
-      reason: result.reason || 'Custom script evaluation',
-      details: result.details,
-    };
-  } catch (error) {
-    if (error instanceof Error) {
-      throw error;
-    }
-    throw new Error(`Script execution error: ${error}`);
+  if (typeof candidate !== 'function') {
+    throw new Error('Script must export an evaluate function');
   }
+
+  const result = await withTimeout(
+    Promise.resolve((candidate as (ctx: CustomEvalContext) => unknown)(evalContext)),
+    timeoutMs,
+    `Evaluation timed out after ${timeoutMs}ms`
+  );
+
+  return normaliseResult(result, 'Script evaluate function');
 }
 
 /**
@@ -198,9 +209,8 @@ async function executeScriptFile(
 async function callWebhook(
   webhookUrl: string,
   evalContext: CustomEvalContext,
-  timeout: number
+  timeoutMs: number
 ): Promise<CustomEvalResult> {
-  // Validate URL
   let url: URL;
   try {
     url = new URL(webhookUrl);
@@ -208,54 +218,37 @@ async function callWebhook(
     throw new Error(`Invalid webhook URL: ${webhookUrl}`);
   }
 
-  // Require HTTPS in production
   if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:') {
     throw new Error('Webhook must use HTTPS in production');
   }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  try {
     const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'ReleaseGate/1.0',
       },
-      body: JSON.stringify({
-        input: evalContext.input,
-        output: evalContext.output,
-        expected: evalContext.expected,
-        config: evalContext.config,
-      }),
+      body: JSON.stringify(evalContext),
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`Webhook returned ${response.status}: ${await response.text()}`);
     }
 
-    const result = (await response.json()) as Record<string, unknown>;
-    const passed = result.passed;
-
-    if (typeof passed !== 'boolean') {
-      throw new Error('Webhook must return { passed: boolean, ... }');
-    }
-
-    return {
-      passed,
-      score: typeof result.score === 'number' ? result.score : (passed ? 1.0 : 0.0),
-      reason: typeof result.reason === 'string' ? result.reason : 'Webhook evaluation',
-      details: result.details as Record<string, unknown> | undefined,
-    };
+    const result = (await response.json()) as unknown;
+    return normaliseResult(result, 'Webhook');
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(`Webhook timed out after ${timeout}ms`);
+      throw new Error(`Webhook timed out after ${timeoutMs}ms`);
     }
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -268,9 +261,8 @@ export class CustomEvaluator implements Evaluator {
 
   async evaluate(ctx: EvaluatorContext): Promise<EvaluatorResult> {
     const config = (ctx.config || {}) as CustomConfig;
-    const timeout = config.timeout || 30000; // 30 second default
+    const timeoutMs = config.timeout_ms || DEFAULT_TIMEOUT_MS;
 
-    // Build evaluation context
     const evalContext: CustomEvalContext = {
       input: ctx.input,
       output: ctx.output,
@@ -278,12 +270,11 @@ export class CustomEvaluator implements Evaluator {
       config: config.context || {},
     };
 
-    // Determine execution mode
     const modes = [
       config.function ? 'function' : null,
       config.script ? 'script' : null,
       config.webhook ? 'webhook' : null,
-    ].filter(Boolean);
+    ].filter((m): m is string => m !== null);
 
     if (modes.length === 0) {
       return {
@@ -301,18 +292,17 @@ export class CustomEvaluator implements Evaluator {
       };
     }
 
+    const mode = config.function ? 'inline_function' : config.script ? 'script_file' : 'webhook';
+
     try {
       let result: CustomEvalResult;
 
       if (config.function) {
-        result = await executeInlineFunction(config.function, evalContext, timeout);
+        result = await executeInlineFunction(config.function, evalContext, timeoutMs);
       } else if (config.script) {
-        result = await executeScriptFile(config.script, evalContext, timeout);
-      } else if (config.webhook) {
-        result = await callWebhook(config.webhook, evalContext, timeout);
+        result = await executeScriptFile(config.script, evalContext, timeoutMs);
       } else {
-        // This shouldn't happen given the checks above
-        throw new Error('No evaluation mode specified');
+        result = await callWebhook(config.webhook as string, evalContext, timeoutMs);
       }
 
       return {
@@ -320,8 +310,8 @@ export class CustomEvaluator implements Evaluator {
         score: result.score ?? (result.passed ? 1.0 : 0.0),
         reason: result.reason || (result.passed ? 'Custom evaluation passed' : 'Custom evaluation failed'),
         details: {
-          mode: config.function ? 'inline_function' : config.script ? 'script_file' : 'webhook',
-          timeout,
+          mode,
+          timeout_ms: timeoutMs,
           ...result.details,
         },
       };
@@ -332,18 +322,9 @@ export class CustomEvaluator implements Evaluator {
         reason: `Custom evaluator error: ${error instanceof Error ? error.message : String(error)}`,
         details: {
           error: String(error),
-          mode: config.function ? 'inline_function' : config.script ? 'script_file' : 'webhook',
+          mode,
         },
       };
     }
   }
-}
-
-// Legacy export
-export function custom(): EvaluatorResult {
-  return {
-    passed: false,
-    score: 0,
-    reason: 'Use CustomEvaluator.evaluate() instead',
-  };
 }

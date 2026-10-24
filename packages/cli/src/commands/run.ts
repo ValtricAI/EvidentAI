@@ -7,7 +7,7 @@
  * Features:
  * - Config file discovery and loading
  * - Test execution with progress reporting
- * - Multiple output formats (JSON, TAP, JUnit)
+ * - Multiple output formats (JSON, TAP, JUnit, GitHub PR markdown)
  * - CI/CD integration with exit codes
  * - Result uploading to ReleaseGate cloud
  */
@@ -18,7 +18,7 @@ import * as path from 'path';
 import { loadConfig } from '../config/loader';
 import type { Config } from '../config/types';
 import { execute, type RunResult, type ProgressEvent } from '../runner/executor';
-import { ConsoleReporter, getReporter } from '../runner/reporters';
+import { ConsoleReporter, getReporter, isReporterFormat, REPORTER_FORMATS, type ReporterFormat } from '../runner/reporters';
 import { getGitInfo } from '../utils/git';
 import { hashConfig } from '../utils/hash';
 import { colorize } from '../utils/logger';
@@ -37,7 +37,7 @@ interface RunOptions {
   verbose?: boolean;
   quiet?: boolean;
   output?: string;
-  format?: 'json' | 'tap' | 'junit' | 'pretty';
+  format?: string;
   upload?: boolean;
   noThresholds?: boolean;
   dryRun?: boolean;
@@ -50,12 +50,10 @@ interface RunOptions {
 class ProgressReporter {
   private verbose: boolean;
   private quiet: boolean;
-  private startTime: number;
 
   constructor(verbose: boolean, quiet: boolean) {
     this.verbose = verbose;
     this.quiet = quiet;
-    this.startTime = Date.now();
   }
 
   onProgress(event: ProgressEvent): void {
@@ -296,6 +294,7 @@ interface ValidatedOptions {
   timeout: number;
   retries: number;
   retryDelay: number;
+  format: ReporterFormat;
 }
 
 function validateOptions(options: RunOptions): ValidatedOptions {
@@ -321,11 +320,16 @@ function validateOptions(options: RunOptions): ValidatedOptions {
     errors.push(`--retry-delay must be between 100ms and 60000ms (got: ${options.retryDelay})`);
   }
 
+  const formatOption = options.format || 'pretty';
+  if (!isReporterFormat(formatOption)) {
+    errors.push(`--format must be one of ${REPORTER_FORMATS.join(', ')} (got: ${formatOption})`);
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid options:\n  ${errors.join('\n  ')}`);
   }
 
-  return { concurrency, timeout, retries, retryDelay };
+  return { concurrency, timeout, retries, retryDelay, format: formatOption as ReporterFormat };
 }
 
 // =============================================================================
@@ -344,7 +348,7 @@ export function createRunCommand(): Command {
     .option('-v, --verbose', 'Show detailed output for each test')
     .option('-q, --quiet', 'Suppress all output except errors')
     .option('-o, --output <path>', 'Write results to file')
-    .option('-f, --format <format>', 'Output format: json, tap, junit, pretty (default: pretty)', 'pretty')
+    .option('-f, --format <format>', `Output format: ${REPORTER_FORMATS.join(', ')}`, 'pretty')
     .option('--upload', 'Upload results to ReleaseGate cloud')
     .option('--no-thresholds', 'Skip threshold checks (always exit 0)')
     .option('--dry-run', 'Load config and show what would run without executing')
@@ -355,6 +359,7 @@ Examples:
   $ releasegate run --verbose                 Show detailed test output
   $ releasegate run --dry-run                 Preview without executing
   $ releasegate run -o results.json -f json   Output results to JSON file
+  $ releasegate run -o comment.md -f github-pr Write a markdown summary for a PR comment
   $ releasegate run --timeout 120000          Increase timeout to 2 minutes
   $ releasegate run --upload                  Upload results to dashboard
 
@@ -443,7 +448,7 @@ async function runCommand(options: RunOptions): Promise<void> {
     });
 
     // Format output
-    const outputReporter = getReporter(options.format || 'pretty');
+    const outputReporter = getReporter(validatedOpts.format);
     const output = outputReporter.format(result);
 
     // Write to file or console

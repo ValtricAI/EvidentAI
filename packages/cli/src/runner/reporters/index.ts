@@ -4,7 +4,12 @@ import { TapReporter } from './tap';
 import { JUnitReporter } from './junit';
 import { GithubPrReporter } from './github-pr';
 
-export type ReporterFormat = 'pretty' | 'json' | 'tap' | 'junit';
+export const REPORTER_FORMATS = ['pretty', 'json', 'tap', 'junit', 'github-pr'] as const;
+export type ReporterFormat = (typeof REPORTER_FORMATS)[number];
+
+export function isReporterFormat(value: string): value is ReporterFormat {
+  return (REPORTER_FORMATS as readonly string[]).includes(value);
+}
 
 export function getReporter(format: ReporterFormat) {
   switch (format) {
@@ -14,6 +19,8 @@ export function getReporter(format: ReporterFormat) {
       return new TapReporter();
     case 'junit':
       return new JUnitReporter();
+    case 'github-pr':
+      return new GithubPrReporter();
     case 'pretty':
     default:
       return new ConsoleReporter();

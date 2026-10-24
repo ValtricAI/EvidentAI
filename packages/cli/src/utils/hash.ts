@@ -7,6 +7,7 @@
 
 import { createHash } from 'crypto';
 import type { Config } from '../config/types';
+import { getConfig, getCriteria, getExpected } from '../runner/executor';
 
 /**
  * Create a SHA256 hash of the configuration
@@ -44,9 +45,9 @@ function normalizeConfig(config: Config): object {
         name: c.name,
         input: c.input,
         evaluator: c.evaluator,
-        expected: c.expected,
-        criteria: c.criteria,
-        config: c.config,
+        expected: getExpected(c),
+        criteria: getCriteria(c),
+        config: getConfig(c),
       })),
     })),
     thresholds: config.thresholds,

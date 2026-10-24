@@ -83,9 +83,19 @@ export const PromptInjectionConfigSchema = z.object({
 }).optional();
 
 export const CustomEvaluatorConfigSchema = z.object({
-  script: z.string().min(1, 'Script path is required'),
+  function: z.string().min(1).optional()
+    .describe('Inline JavaScript function source, e.g. "({ output }) => ({ passed: output.length < 500 })"'),
+  script: z.string().min(1).optional()
+    .describe('Path to a .js/.mjs/.cjs file exporting an evaluate function'),
+  webhook: z.string().url('Webhook must be a valid URL').optional()
+    .describe('HTTP endpoint that receives { input, output, expected, config } and returns { passed, ... }'),
   timeout_ms: z.number().positive().default(30000),
-});
+  context: z.record(z.unknown()).optional()
+    .describe('Arbitrary data passed to the evaluator as `config`'),
+}).refine(
+  (cfg) => [cfg.function, cfg.script, cfg.webhook].filter(Boolean).length === 1,
+  { message: 'Custom evaluator config must specify exactly one of: function, script, webhook' }
+);
 
 // =============================================================================
 // Test Case Schemas (Discriminated Union)

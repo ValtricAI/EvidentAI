@@ -127,34 +127,53 @@ function addJitter(delayMs: number): number {
 }
 
 /**
+ * Error thrown by withRetry after all attempts are exhausted (or on a
+ * non-retryable error). Carries the number of retries actually performed so
+ * callers can report it accurately.
+ */
+export class RetryExhaustedError extends Error {
+  constructor(
+    message: string,
+    public readonly retries: number,
+    public readonly cause: Error
+  ) {
+    super(message);
+    this.name = 'RetryExhaustedError';
+  }
+}
+
+/**
  * Execute with enhanced retry logic
  * - Exponential backoff with jitter
  * - Non-retryable error detection (400, 401, 403, 404)
  * - Extended delay for rate limits (429)
+ *
+ * `retries` is the number of re-attempts after the first call: 0 means the
+ * first call succeeded, N means N additional calls were made.
  */
-async function withRetry<T>(
+export async function withRetry<T>(
   fn: () => Promise<T>,
   maxRetries: number,
   delayMs: number,
   context?: string
 ): Promise<{ result: T; retries: number }> {
   let lastError: Error | null = null;
-  let retries = 0;
+  const contextStr = context ? ` [${context}]` : '';
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const result = await fn();
-      return { result, retries };
+      return { result, retries: attempt };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      retries = attempt + 1;
 
       // Check if error is retryable
       if (lastError instanceof APIError && !lastError.isRetryable()) {
         // Non-retryable error (400, 401, 403, 404) - fail fast
-        const contextStr = context ? ` [${context}]` : '';
-        throw new Error(
-          `${lastError.message}${contextStr} (non-retryable, attempt ${retries}/${maxRetries + 1})`
+        throw new RetryExhaustedError(
+          `${lastError.message}${contextStr} (non-retryable, attempt ${attempt + 1}/${maxRetries + 1})`,
+          attempt,
+          lastError
         );
       }
 
@@ -179,52 +198,63 @@ async function withRetry<T>(
   }
 
   // Enhance error message with retry context
-  const contextStr = context ? ` [${context}]` : '';
   const message = lastError?.message || 'Unknown error';
-  throw new Error(`${message}${contextStr} (after ${retries} attempts)`);
+  throw new RetryExhaustedError(
+    `${message}${contextStr} (after ${maxRetries + 1} attempts)`,
+    maxRetries,
+    lastError ?? new Error(message)
+  );
 }
 
 /**
- * Run promises with limited concurrency
+ * Run tasks with a hard limit on how many are in flight at once.
+ *
+ * - Never more than `concurrency` tasks run concurrently.
+ * - Results are returned in input order regardless of completion order.
+ * - If a task rejects, no further tasks are started; the already in-flight
+ *   tasks are allowed to settle, then the first rejection is re-thrown.
  */
-async function runWithConcurrency<T>(
-  tasks: (() => Promise<T>)[],
+export async function runWithConcurrency<T>(
+  tasks: readonly (() => Promise<T>)[],
   concurrency: number
 ): Promise<T[]> {
-  const results: T[] = [];
-  const executing: Promise<void>[] = [];
+  const limit = Math.max(1, Math.floor(concurrency));
+  const results: T[] = new Array(tasks.length);
+  let nextIndex = 0;
+  let firstError: unknown;
+  let failed = false;
 
-  for (const task of tasks) {
-    const promise = task().then((result) => {
-      results.push(result);
-    });
-
-    executing.push(promise);
-
-    if (executing.length >= concurrency) {
-      await Promise.race(executing);
-      // Remove completed promises
-      executing.splice(
-        0,
-        executing.length,
-        ...executing.filter((p) => {
-          // This is a bit hacky but works for Promise.race cleanup
-          let resolved = false;
-          p.then(() => (resolved = true)).catch(() => (resolved = true));
-          return !resolved;
-        })
-      );
+  async function worker(): Promise<void> {
+    while (!failed) {
+      const index = nextIndex++;
+      if (index >= tasks.length) return;
+      const task = tasks[index];
+      if (!task) return;
+      try {
+        results[index] = await task();
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          firstError = error;
+        }
+        return;
+      }
     }
   }
 
-  await Promise.all(executing);
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
+  await Promise.all(workers);
+
+  if (failed) {
+    throw firstError;
+  }
   return results;
 }
 
 /**
  * Extract expected value from a test case (handles discriminated union)
  */
-function getExpected(testCase: TestCase): string | string[] | undefined {
+export function getExpected(testCase: TestCase): string | string[] | undefined {
   if ('expected' in testCase) {
     return testCase.expected;
   }
@@ -234,7 +264,7 @@ function getExpected(testCase: TestCase): string | string[] | undefined {
 /**
  * Extract criteria from a test case (handles discriminated union)
  */
-function getCriteria(testCase: TestCase): string | undefined {
+export function getCriteria(testCase: TestCase): string | undefined {
   if ('criteria' in testCase) {
     return testCase.criteria;
   }
@@ -244,7 +274,7 @@ function getCriteria(testCase: TestCase): string | undefined {
 /**
  * Extract config from a test case
  */
-function getConfig(testCase: TestCase): Record<string, unknown> | undefined {
+export function getConfig(testCase: TestCase): Record<string, unknown> | undefined {
   if ('config' in testCase && testCase.config) {
     return testCase.config as Record<string, unknown>;
   }
@@ -428,7 +458,7 @@ export class Executor {
         },
         latencyMs: Date.now() - startTime,
         timestamp: new Date().toISOString(),
-        retries: this.options.maxRetries,
+        retries: error instanceof RetryExhaustedError ? error.retries : 0,
       };
     }
 

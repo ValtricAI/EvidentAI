@@ -7,7 +7,7 @@
  * - Timeout wrappers for integration tests
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe } from 'vitest';
 
 // =============================================================================
 // API Key Helpers
@@ -30,9 +30,9 @@ export function hasAnthropicKey(): boolean {
 /**
  * Skip test if OpenAI API key is not set
  */
-export function skipIfNoOpenAIKey() {
+export function skipIfNoOpenAIKey(): typeof describe {
   if (!hasOpenAIKey()) {
-    return describe.skip;
+    return describe.skip as typeof describe;
   }
   return describe;
 }
@@ -40,9 +40,9 @@ export function skipIfNoOpenAIKey() {
 /**
  * Skip test if Anthropic API key is not set
  */
-export function skipIfNoAnthropicKey() {
+export function skipIfNoAnthropicKey(): typeof describe {
   if (!hasAnthropicKey()) {
-    return describe.skip;
+    return describe.skip as typeof describe;
   }
   return describe;
 }

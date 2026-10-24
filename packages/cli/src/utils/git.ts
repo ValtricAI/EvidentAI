@@ -74,7 +74,7 @@ export function getGitInfo(): GitInfo | null {
           process.env.CIRCLE_BRANCH ||
           process.env.BUILD_SOURCEBRANCHNAME ||
           process.env.BITBUCKET_BRANCH ||
-          undefined;
+          null;
   }
 
   // Get commit message
