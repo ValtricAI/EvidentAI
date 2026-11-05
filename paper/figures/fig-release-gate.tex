@@ -1,0 +1,22 @@
+% Release-gate flow: config -> executor -> provider -> evaluators -> thresholds -> exit code / CI
+\begin{tikzpicture}[
+  font=\small,
+  node distance=6mm and 11mm,
+  box/.style={draw=black!60, rounded corners=1.5pt, align=center, minimum height=9mm, inner sep=3pt, fill=white},
+  store/.style={box, fill=black!4},
+  arrow/.style={-{Latex[length=2mm]}, thick, black!70},
+  lbl/.style={font=\scriptsize, text=black!60}
+]
+\node[store] (cfg) {\texttt{releasegate.yaml}\\suites, cases $(x, s, C)$,\\thresholds};
+\node[box, right=of cfg] (exec) {Executor\\bounded concurrency,\\retries, ordered results};
+\node[box, right=22mm of exec] (prov) {Model under test\\hosted provider API\\or custom endpoint};
+\node[box, below=of prov] (evals) {Evaluators\\exact, contains, LLM judge,\\PII, prompt injection, custom};
+\node[box, left=of evals] (thr) {Thresholds\\global, per suite,\\average score};
+\node[store, left=of thr] (out) {Reports and exit code\\JSON / JUnit / TAP / PR comment\\\texttt{0} passes, \texttt{1} blocks the release};
+
+\draw[arrow] (cfg) -- (exec);
+\draw[arrow] (exec) -- node[lbl, above, align=center] {input $x$,\\system prompt $s$} (prov);
+\draw[arrow] (prov) -- node[lbl, right] {output $y$} (evals);
+\draw[arrow] (evals) -- node[lbl, above] {pass, score} (thr);
+\draw[arrow] (thr) -- (out);
+\end{tikzpicture}

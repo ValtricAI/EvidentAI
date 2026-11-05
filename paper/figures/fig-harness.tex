@@ -1,0 +1,31 @@
+% Harness data flow: sources -> dedupe -> splits -> perturbations -> detectors -> metrics
+\begin{tikzpicture}[
+  font=\small,
+  node distance=3.5mm and 6mm,
+  box/.style={draw=black!60, rounded corners=1.5pt, align=center, inner sep=3pt, fill=white, minimum height=7mm},
+  data/.style={box, fill=black!4},
+  arrow/.style={-{Latex[length=1.8mm]}, thick, black!70},
+  lbl/.style={font=\scriptsize, text=black!60, align=center}
+]
+\node[data] (src) {Public sources\\deepset, safe-guard, dolly, alpaca\\jailbreak-classification, gandalf};
+\node[box, right=of src] (dd) {Normalise\\and dedupe\\(whitespace, case)};
+\node[data, right=of dd, yshift=9mm] (ind) {In-distribution\\\texttt{train} / \texttt{val} / \texttt{test}\\stratified 80/10/10};
+\node[data, right=of dd, yshift=-9mm] (ood) {\texttt{test\_ood}\\whole sources never\\used for training};
+\node[data, below=10mm of ood] (evid) {\texttt{test\_evident}\\hand-labelled corpus\\(regex test file)};
+\node[box, right=of ind, yshift=-9mm] (pert) {Perturb attacks\\8 TokenBreak-style\\and obfuscation types};
+\node[data, right=of pert] (tp) {\texttt{test\_perturbed}};
+\node[box, below=of tp] (det) {Detectors\\regex, n-gram LR, DeBERTa\\baselines, Evident Guard};
+\node[data, below=of det] (met) {\texttt{metrics.json}\\P, R, F$_1$, AUROC, AP,\\FPR@95\%R, latency};
+
+\draw[arrow] (src) -- (dd);
+\draw[arrow] (dd) -- (ind);
+\draw[arrow] (dd) -- (ood);
+\draw[arrow] (ind) -- node[lbl, above right] {attacks} (pert);
+\draw[arrow] (ood) -- (pert);
+\draw[arrow] (pert) -- (tp);
+\draw[arrow] (tp) -- (det);
+\draw[arrow] (ind.east) -- ++(4mm,0) |- (det.west);
+\draw[arrow] (ood.south east) -- ++(2mm,-2mm) -| (det.west);
+\draw[arrow] (evid) -| (det);
+\draw[arrow] (det) -- (met);
+\end{tikzpicture}

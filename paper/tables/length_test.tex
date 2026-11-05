@@ -1,0 +1,13 @@
+\begin{tabular}{@{}lrrrrrl@{}}
+\toprule
+Detector & AUROC & F$_1$ & AUROC$_\mathrm{m}$ & F$_{1,\mathrm{m}}$ & $n_\mathrm{m}$ & AUROC by length quartile \\
+\midrule
+regex (low) & 0.644 & 0.450 & 0.649 & 0.463 & 556 & 0.64 / 0.67 / 0.59 / 0.70 \\
+regex (medium) & 0.649 & 0.461 & 0.654 & 0.475 & 556 & 0.64 / 0.68 / 0.59 / 0.70 \\
+regex (high) & 0.654 & 0.472 & 0.658 & 0.484 & 556 & 0.64 / 0.68 / 0.60 / 0.71 \\
+length-only (confound) & 0.745 & 0.641 & 0.676 & 0.668 & 556 & 0.54 / 0.75 / 0.66 / 0.71 \\
+char n-gram LR & 0.996 & 0.966 & 0.995 & 0.965 & 556 & 0.99 / 1.00 / 1.00 / 0.98 \\
+ProtectAI DeBERTa v2 & 0.986 & 0.895 & 0.984 & 0.888 & 556 & 0.93 / 1.00 / 0.99 / 0.97 \\
+Evident Guard v0 & 0.999 & 0.980 & 0.999 & 0.982 & 556 & 1.00 / 1.00 / 1.00 / 1.00 \\
+\bottomrule
+\end{tabular}

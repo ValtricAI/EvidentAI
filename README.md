@@ -265,6 +265,8 @@ What this says, plainly:
 
 Both the regex layer and any of these classifiers plug into `@evidentai/shield` and `@evidentai/gateway` through the `ml` analyzer, with optional deferral of borderline scores to an LLM judge.
 
+The method, harness and results are written up in [paper/evidentai-release-gates.pdf](./paper/evidentai-release-gates.pdf) (LaTeX source in `paper/`, rebuilt from the checked-in metrics with `make final`).
+
 ---
 
 ## Development

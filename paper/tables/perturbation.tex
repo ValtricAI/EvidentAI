@@ -1,0 +1,17 @@
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Perturbation & regex L & regex M & regex H & length & n-gram LR & DeBERTa v2 & EG v0 \\
+\midrule
+unperturbed, in-distribution & 0.291 & 0.301 & 0.310 & 0.724 & 0.948 & 0.813 & 0.985 \\
+unperturbed, OOD & 0.584 & 0.604 & 0.608 & 0.508 & 0.932 & 0.983 & 0.887 \\
+\midrule
+token break space & 0.107 & 0.120 & 0.128 & 0.295 & 0.873 & 0.917 & 0.895 \\
+token break hyphen & 0.110 & 0.120 & 0.128 & 0.655 & 0.833 & 0.932 & 0.902 \\
+zero width & 0.087 & 0.098 & 0.105 & 0.655 & 0.882 & 0.932 & 0.915 \\
+homoglyph & 0.087 & 0.095 & 0.868 & 0.552 & 0.828 & 0.927 & 0.905 \\
+leetspeak & 0.090 & 0.098 & 0.105 & 0.552 & 0.613 & 0.835 & 0.887 \\
+case flip & 0.510 & 0.532 & 0.542 & 0.552 & 0.938 & 0.983 & 1.000 \\
+benign prefix & 0.512 & 0.535 & 0.542 & 0.682 & 0.830 & 0.927 & 0.940 \\
+base64 wrap & 0.000 & 0.000 & 0.665 & 1.000 & 0.018 & 1.000 & 0.762 \\
+\bottomrule
+\end{tabular}

@@ -1,0 +1,13 @@
+\begin{tabular}{@{}llrrrrrrrrr@{}}
+\toprule
+Detector & Kind & Thr. & P & R & F$_1$ & FPR & AUROC & AP & FPR@95\%R & ms/text \\
+\midrule
+regex (low) & rule & 0.01 & 0.990 & 0.291 & 0.450 & 0.002 & 0.644 & 0.561 & 1.000 & 0.08 \\
+regex (medium) & rule & 0.01 & 0.990 & 0.301 & 0.461 & 0.002 & 0.649 & 0.566 & 1.000 & 0.10 \\
+regex (high) & rule & 0.01 & 0.990 & 0.310 & 0.472 & 0.002 & 0.654 & 0.572 & 1.000 & 0.11 \\
+length-only (confound) & confound & 0.50 & 0.576 & 0.724 & 0.641 & 0.341 & 0.745 & 0.596 & 0.633 & 0.00 \\
+char n-gram LR & classifier & 0.50 & 0.984 & 0.948 & 0.966 & 0.010 & 0.996 & 0.994 & 0.012 & 0.33 \\
+ProtectAI DeBERTa v2 & classifier & 0.50 & 0.996 & 0.813 & 0.895 & 0.002 & 0.986 & 0.985 & 0.027 & 294.21 \\
+Evident Guard v0 & classifier & 0.14 & 0.976 & 0.985 & 0.980 & 0.016 & 0.999 & 0.999 & 0.002 & 19.59 \\
+\bottomrule
+\end{tabular}
