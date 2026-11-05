@@ -9,3 +9,6 @@ models/
 *.bin
 .hf-cache/
 results/run.log
+
+# The root .gitignore ignores results/ for CLI run output; the harness summary tables ARE committed.
+!results/
