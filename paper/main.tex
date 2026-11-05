@@ -70,7 +70,7 @@ Finally we describe how those detectors compose at runtime (\cref{sec:cascade}):
 
 The results (\cref{sec:results}) are mixed in a way we think is useful to report. The regular-expression library is a precise filter and a poor defence: out of distribution it has precision \mregexmediumtestoodprecision{} but recall \mregexmediumtestoodrecall{}, and its recall under token-break perturbation is about \mpregexmediumtokenbreakspace. The $n$-gram baseline, which trains in seconds, reaches F$_1$ \mngramlrtestoodfone{} out of distribution. The public DeBERTa-v3-base detector is the bar at F$_1$ \mprotectaidebertavtwotestoodfone{}, paid for at \mprotectaidebertavtwotestoodlatency\ms{} per text on four CPU cores. Our own small model is near-perfect in distribution (AUROC \mevidentguardvzerotestauroc) and robust to perturbation (F$_1$ \mevidentguardvzerotestperturbedfone), but it overfits its training sources, generalises worse than the $n$-gram baseline (AUROC \mevidentguardvzerotestoodauroc{} out of distribution) and, at the threshold that maximised validation F$_1$, has an out-of-distribution false-positive rate of \mevidentguardvzerotestoodfprpct\%. The length-only baseline's out-of-distribution AUROC is \mlengthonlytestoodauroc{}, below chance, and every detector keeps its AUROC on length-matched subsets, so none of this is a length artefact. We discuss what these numbers mean for deployment in \cref{sec:discussion} and list the limitations plainly in \cref{sec:limitations}.
 
-Everything here is reproducible from a public repository with the commands in \cref{sec:repro}; the harness output that produced every number in this paper is checked in alongside it.
+Everything here is reproducible from the project repository with the commands in \cref{sec:repro}; the harness output that produced every number in this paper is checked in alongside it.
 
 \section{Background and related work}
 \label{sec:related}
@@ -328,7 +328,7 @@ On the hand-labelled corpus (\cref{tab:evident}) the regular-expression library 
 \section{Reproducibility}
 \label{sec:repro}
 
-Everything runs on CPU. The commands below reproduce the data, the model and every table and figure in this paper from the public repository.
+Everything runs on CPU. The commands below reproduce the data, the model and every table and figure in this paper from the project repository.
 
 \begin{verbatim}
 pnpm install --frozen-lockfile   # Node workspace: detectors, cli, shield, gateway
