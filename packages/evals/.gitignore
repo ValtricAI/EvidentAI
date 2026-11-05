@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+models/
+*.onnx
+*.safetensors
+*.bin
+.hf-cache/
+results/run.log

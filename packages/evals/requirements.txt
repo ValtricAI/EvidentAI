@@ -1,0 +1,19 @@
+# Install torch first from the CPU index to avoid pulling CUDA wheels:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch
+transformers>=4.45
+# optimum[onnxruntime] pins huggingface_hub below 1.0, which datasets 5 requires
+datasets>=3.0,<5
+scikit-learn
+optimum[onnxruntime]
+onnx
+onnxruntime
+numpy
+pandas
+pyyaml
+tqdm
+sentencepiece
+protobuf
+tiktoken
+accelerate
+pytest

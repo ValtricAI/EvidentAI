@@ -240,7 +240,30 @@ EvidentAI/
 | **API** | Partial. Runs and projects endpoints with API-key auth and 26 tests; suites, evidence packs, GitHub and auth routers are stubs. No migrations yet. |
 | **Dashboard** | Not started. |
 
-Detection is heuristic. The pattern library is tuned against a labelled corpus in `packages/detectors/src/__tests__`, and that corpus is the place to add a missed attack or a false positive.
+The pattern library is tuned against a labelled corpus in `packages/detectors/src/__tests__`, and that corpus is the place to add a missed attack or a false positive.
+
+---
+
+## Measured detection quality
+
+`packages/evals` is a reproducible harness that scores every detector on public datasets. The split that matters is `test_ood`: whole sources (jackhhao/jailbreak-classification, lakera/gandalf_ignore_instructions) that no model here was trained on. Full tables, per-perturbation recall and a length-confound check are in [packages/evals/results/latest.md](./packages/evals/results/latest.md).
+
+| Detector | OOD precision | OOD recall | OOD F1 | OOD AUROC | Perturbed F1 | CPU latency |
+|---|---:|---:|---:|---:|---:|---:|
+| Regex library (medium) | 0.990 | 0.604 | 0.750 | 0.80 | 0.33 | 0.1 ms |
+| Char n-gram logistic regression | 0.952 | 0.932 | 0.942 | 0.98 | 0.83 | 0.6 ms |
+| ProtectAI DeBERTa-v3 v2 | 0.996 | 0.983 | 0.990 | 1.00 | 0.96 | 370 ms |
+| Evident Guard v0 (ours, DeBERTa-xsmall) | 0.772 | 0.887 | 0.826 | 0.86 | 0.90 | 20 ms |
+| Length-only confound | 0.553 | 0.508 | 0.530 | 0.34 | 0.00 | 0 ms |
+
+What this says, plainly:
+
+- The regex layer is a precise but incomplete filter: about 1 percent false positives and roughly 60 percent recall on unseen sources, collapsing under token-break, leetspeak and homoglyph obfuscation. Use it as the sub-millisecond first stage, not as the whole defence.
+- ProtectAI's base-size model is the bar on this benchmark. Our own v0 model is excellent in-distribution (AUROC 0.999) and robust to perturbations, but overfits its training sources and generalises worse than the n-gram baseline out of distribution. It is 15 to 20 times faster than the base model. Threshold selection at a target false-positive rate and training across more sources are the obvious next steps.
+- Nobody is riding text length: the length-only baseline is below chance out of distribution, and every detector holds its AUROC on length-matched subsets.
+- Not measured: Meta Prompt Guard 2 (gated model, needs a Hugging Face token), TypeSafe Jev (needs an API key) and an LLM judge (needs an OpenAI key). The harness has adapters for all three; set the key and rerun.
+
+Both the regex layer and any of these classifiers plug into `@evidentai/shield` and `@evidentai/gateway` through the `ml` analyzer, with optional deferral of borderline scores to an LLM judge.
 
 ---
 

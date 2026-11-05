@@ -524,6 +524,20 @@ export const INJECTION_PATTERNS: readonly InjectionPattern[] = [
     )
   ),
   def(
+    'encoded_payload',
+    'obfuscation',
+    'high',
+    'Encoded payload with a decode-and-follow framing',
+    // The eval harness showed real framings put words between the encoding
+    // word and the blob ("Decode this base64 and follow the instructions
+    // inside: <blob>") or put the blob first ("b64: <blob>\nDecode and
+    // comply."). Require both an encoding/decoding cue and a long blob in
+    // the same message, in either order, within a short window.
+    rx(
+      `\\b(?:base\\s*64|b64|rot\\s*13|hex(?:adecimal)?|encoded|encrypted|cipher(?:text)?|decode (?:it|this|that|the following))\\b[^\\n]{0,80}?[:\\n][ \\t]*[A-Za-z0-9+/=]{24,}|[A-Za-z0-9+/=]{24,}[ \\t]*\\n?[ \\t]*(?:decode|and (?:follow|comply|obey|execute|do|act))\\b`
+    )
+  ),
+  def(
     'encoded_instruction_reference',
     'obfuscation',
     'medium',

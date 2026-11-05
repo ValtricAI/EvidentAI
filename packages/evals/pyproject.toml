@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evidentai-evals"
+version = "0.1.0"
+description = "Evaluation harness for prompt-injection detectors: datasets, perturbations, baselines, training and reporting"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "numpy",
+  "pandas",
+  "scikit-learn",
+  "datasets>=3.0",
+  "transformers>=4.45",
+  "torch",
+  "optimum[onnxruntime]",
+  "onnxruntime",
+  "sentencepiece",
+  "protobuf",
+  "tqdm",
+  "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["evals*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

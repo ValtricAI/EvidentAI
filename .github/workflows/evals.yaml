@@ -1,0 +1,56 @@
+name: Evals harness
+
+# Unit tests for the detector evaluation harness. These run without network
+# access to Hugging Face: dataset download, training and the full detector run
+# are manual steps documented in packages/evals/README.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/evals/**'
+      - 'packages/detectors/**'
+      - '.github/workflows/evals.yaml'
+  pull_request:
+    paths:
+      - 'packages/evals/**'
+      - 'packages/detectors/**'
+      - '.github/workflows/evals.yaml'
+
+jobs:
+  pytest:
+    name: Harness unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/evals
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Node workspace (for the regex scoring bridge)
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: packages/evals/requirements.txt
+
+      - name: Install Python dependencies (CPU torch)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Test
+        run: python -m pytest -q
