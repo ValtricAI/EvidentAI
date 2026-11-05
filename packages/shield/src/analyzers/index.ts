@@ -1,12 +1,15 @@
 import type { Analyzer, AnalyzerType } from '../types.js';
 import { heuristicAnalyzer } from './heuristic.js';
 import { llmJudgeAnalyzer } from './llm-judge.js';
+import { mlAnalyzer } from './ml.js';
 
 export { HeuristicAnalyzer, heuristicAnalyzer } from './heuristic.js';
 export { LLMJudgeAnalyzer, llmJudgeAnalyzer } from './llm-judge.js';
+export { MLAnalyzer, mlAnalyzer } from './ml.js';
 
 const analyzerRegistry: Record<AnalyzerType, Analyzer> = {
   heuristic: heuristicAnalyzer,
+  ml: mlAnalyzer,
   'llm-judge': llmJudgeAnalyzer,
 };
 

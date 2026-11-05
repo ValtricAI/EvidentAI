@@ -90,6 +90,45 @@ Every pattern has a severity. Sensitivity selects which severities are consulted
 
 `rephrase` with no internal LLM key falls back to stripping the matched text; the gateway warns about this at startup.
 
+## ML classifier layer
+
+The regex layer only catches attacks that use known vocabulary. An optional
+learned classifier runs after it, over the text of every `user` message in the
+request concatenated in order (multi-turn injections are often split across
+turns). System, developer, assistant and tool messages are not scored.
+
+```typescript
+const gateway = await createGateway({
+  input: {
+    mlClassifier: {
+      backend: 'transformers',           // 'transformers' | 'http' | 'jev' | 'custom'
+      model: 'protectai/deberta-v3-base-prompt-injection-v2',
+      threshold: 0.5,                    // P(injection) at or above counts as an attack
+      action: 'log',                     // or 'block' (403, code ml_blocked)
+      failClosed: false,                 // true: 503 when the classifier itself fails
+    },
+  },
+});
+```
+
+Backends:
+
+| Backend | Config | Notes |
+|---------|--------|-------|
+| `transformers` | `model?`, `localFilesOnly?`, `cacheDir?`, `dtype?`, `temperature?` | Local ONNX model via `@huggingface/transformers` (optional peer dependency, install it yourself). Default `protectai/deberta-v3-base-prompt-injection-v2`. Meta's Prompt Guard 2 models need `HF_TOKEN`. A local directory with a `calibration.json` `{"temperature": t}` is applied to the logits. The model loads on the first request. |
+| `http` | `url`, `headers?`, `scorePath?` (default `score`), `textField?` (default `text`), `timeoutMs?` | Your own classifier service: POST `{text}`, read a number. |
+| `jev` | `apiKey?` (or `TYPESAFE_API_KEY`), `url?`, `model?`, `scoreQuestion?`, `choiceQuestion?`, `scorePaths?` | TypeSafe AI's Jev decision model. Implemented against the published request shape but not yet verified against the live service; set `scorePaths` to the response path for your account if the default guesses miss. |
+| `custom` | `name`, `options?` | A backend registered with `registerClassifierBackend`. |
+
+Every response carries `X-ML-Score` (four decimals) and, at or above the
+threshold, `X-ML-Flagged: true`. With `action: 'log'` (the default) nothing
+else changes. With `action: 'block'` the request gets a 403 with
+`{"error": {"code": "ml_blocked", "details": {"score", "threshold", "model"}}}`.
+
+The layer **fails open**: a classifier error is logged and the request goes
+through without a score header. Set `failClosed: true` to return 503
+(`ml_unavailable`) instead. The classifier is built once per gateway.
+
 ## Tool calling
 
 The gateway forwards `tools`, `tool_choice`, `functions`, `function_call`, `response_format`, `seed`, `parallel_tool_calls` and any other field the client sends. Unknown fields pass through untouched, so new OpenAI parameters keep working without a gateway release. On the way back, `tool_calls`, `function_call`, `refusal` and the real `finish_reason` are preserved for every choice.
@@ -156,6 +195,15 @@ Returns an informational list of common OpenAI and Anthropic model names so SDK 
 | `GATEWAY_PII_ALLOW_PATTERNS` | Comma-separated regexes whose matches are not PII | none |
 | `GATEWAY_PII_SCAN_TOOL_ARGUMENTS` | Also scan tool call arguments | `false` |
 | `GATEWAY_LOG_INPUT` / `GATEWAY_LOG_OUTPUT` | Log request and response summaries | `true` |
+| `GATEWAY_ML_BACKEND` | `transformers`, `http`, `jev`; unset disables the ML layer | none |
+| `GATEWAY_ML_MODEL` | Model id or local directory (`transformers`), label (`http`), Jev model alias | backend default |
+| `GATEWAY_ML_THRESHOLD` | P(injection) at or above which input is flagged | `0.5` |
+| `GATEWAY_ML_ACTION` | `log`, `block` | `log` |
+| `GATEWAY_ML_FAIL_CLOSED` | Return 503 when the classifier fails | `false` |
+| `GATEWAY_ML_URL` | Endpoint for `http` (required) or Jev base URL | Jev: `https://api.typesafe.ai/v1/systemone` |
+| `GATEWAY_ML_HEADERS` | JSON object of headers for `http` | none |
+| `GATEWAY_ML_SCORE_PATH` | Dot path to the score in the `http` response | `score` |
+| `GATEWAY_ML_API_KEY` / `TYPESAFE_API_KEY` | Jev API key | none |
 
 Invalid values (an unknown action, a bad PII type, a non-numeric port) stop the gateway at startup with a message naming the variable.
 

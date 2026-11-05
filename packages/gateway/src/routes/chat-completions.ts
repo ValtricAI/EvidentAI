@@ -23,8 +23,16 @@ import type {
   LLMProviderConfig,
   OutputProcessingResult,
 } from '../types.js';
-import { ValidationError, InjectionBlockedError, PIIBlockedError, ProviderError, GatewayError } from '../types.js';
+import {
+  ValidationError,
+  InjectionBlockedError,
+  MLBlockedError,
+  PIIBlockedError,
+  ProviderError,
+  GatewayError,
+} from '../types.js';
 import { sanitizeInput } from '../pipeline/input-sanitizer.js';
+import { classifyUserMessages } from '../pipeline/ml-classifier.js';
 import { processOutput } from '../pipeline/output-processor.js';
 import { routeToLLM } from '../router/llm-router.js';
 
@@ -226,6 +234,38 @@ export function registerChatCompletionsRoute(server: FastifyInstance, config: Ga
     }
 
     // =======================================================================
+    // 3b. ML classifier over the user messages (optional)
+    // =======================================================================
+    const mlResult = await classifyUserMessages(messagesToSend, config);
+    if (mlResult) {
+      if (mlResult.error) {
+        request.log.warn(
+          { requestId, error: mlResult.error, failClosed: mlResult.blocked },
+          mlResult.blocked ? 'ML classifier failed; blocking (failClosed)' : 'ML classifier failed; failing open'
+        );
+        if (mlResult.blocked) {
+          throw new GatewayError('Injection classifier unavailable and failClosed is set', 503, 'ml_unavailable', {
+            error: mlResult.error,
+          });
+        }
+      } else if (mlResult.flagged) {
+        request.log.warn(
+          {
+            requestId,
+            score: mlResult.score,
+            threshold: mlResult.threshold,
+            model: mlResult.model,
+            action: config.input.mlClassifier?.action ?? 'log',
+          },
+          'ML classifier flagged user input'
+        );
+        if (mlResult.blocked) {
+          throw new MLBlockedError(mlResult.score ?? 1, mlResult.threshold, mlResult.model);
+        }
+      }
+    }
+
+    // =======================================================================
     // 4. Route to LLM provider
     // =======================================================================
     let llmResponse: ChatCompletionResponse;
@@ -317,6 +357,7 @@ export function registerChatCompletionsRoute(server: FastifyInstance, config: Ga
           requestId,
           latencyMs,
           injectionDetected: inputResult?.injectionDetected ?? false,
+          mlScore: mlResult?.score,
           piiDetected,
           tokens: finalResponse.usage?.total_tokens,
         },
@@ -329,6 +370,10 @@ export function registerChatCompletionsRoute(server: FastifyInstance, config: Ga
     if (inputResult?.injectionDetected) {
       reply.header('X-Injection-Detected', 'true');
       reply.header('X-Injection-Action', config.input.injectionAction);
+    }
+    if (mlResult?.score !== undefined) {
+      reply.header('X-ML-Score', mlResult.score.toFixed(4));
+      if (mlResult.flagged) reply.header('X-ML-Flagged', 'true');
     }
     if (piiDetected) {
       reply.header('X-PII-Detected', 'true');

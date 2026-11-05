@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 import { PII_ENTITY_TYPES, type PIIEntityType } from '@evidentai/detectors';
-import type { GatewayConfig } from './types.js';
+import type { GatewayConfig, GatewayMLConfig } from './types.js';
 
 export const DEFAULT_PII_TYPES: PIIEntityType[] = ['email', 'phone', 'ssn', 'credit_card'];
 
@@ -72,6 +72,33 @@ const EnvSchema = z.object({
   GATEWAY_INJECTION_CUSTOM_PATTERNS: listFromEnv,
   GATEWAY_LOG_INPUT: boolFromEnv(true),
 
+  // Optional ML classifier layer (unset backend = disabled)
+  GATEWAY_ML_BACKEND: z.enum(['transformers', 'http', 'jev']).optional(),
+  GATEWAY_ML_MODEL: z.string().optional(),
+  GATEWAY_ML_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+  GATEWAY_ML_ACTION: z.enum(['block', 'log']).default('log'),
+  GATEWAY_ML_FAIL_CLOSED: boolFromEnv(false),
+  GATEWAY_ML_URL: z.string().url().optional(),
+  GATEWAY_ML_HEADERS: z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined || v.trim() === '') return undefined;
+      try {
+        const parsed: unknown = JSON.parse(v);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.values(parsed).every((x) => typeof x === 'string')) {
+          return parsed as Record<string, string>;
+        }
+      } catch {
+        // fall through
+      }
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a JSON object of string header values' });
+      return z.NEVER;
+    }),
+  GATEWAY_ML_SCORE_PATH: z.string().optional(),
+  GATEWAY_ML_API_KEY: z.string().optional(),
+  TYPESAFE_API_KEY: z.string().optional(),
+
   GATEWAY_DETECT_PII: boolFromEnv(true),
   GATEWAY_PII_TYPES: listFromEnv.pipe(z.array(z.enum(PII_ENTITY_TYPES as [PIIEntityType, ...PIIEntityType[]])).optional()),
   GATEWAY_PII_ACTION: z.enum(['block', 'redact', 'log']).default('redact'),
@@ -104,6 +131,39 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<Gat
   }
 
   const e = parsed.data;
+
+  let mlClassifier: GatewayMLConfig | undefined;
+  if (e.GATEWAY_ML_BACKEND) {
+    const common = { action: e.GATEWAY_ML_ACTION, threshold: e.GATEWAY_ML_THRESHOLD, failClosed: e.GATEWAY_ML_FAIL_CLOSED };
+    switch (e.GATEWAY_ML_BACKEND) {
+      case 'transformers':
+        mlClassifier = { backend: 'transformers', ...(e.GATEWAY_ML_MODEL ? { model: e.GATEWAY_ML_MODEL } : {}), ...common };
+        break;
+      case 'http':
+        if (!e.GATEWAY_ML_URL) {
+          throw new ConfigError('Invalid gateway environment configuration:\n  GATEWAY_ML_URL: required when GATEWAY_ML_BACKEND=http');
+        }
+        mlClassifier = {
+          backend: 'http',
+          url: e.GATEWAY_ML_URL,
+          headers: e.GATEWAY_ML_HEADERS,
+          ...(e.GATEWAY_ML_SCORE_PATH ? { scorePath: e.GATEWAY_ML_SCORE_PATH } : {}),
+          ...(e.GATEWAY_ML_MODEL ? { model: e.GATEWAY_ML_MODEL } : {}),
+          ...common,
+        };
+        break;
+      case 'jev':
+        mlClassifier = {
+          backend: 'jev',
+          apiKey: e.GATEWAY_ML_API_KEY ?? e.TYPESAFE_API_KEY,
+          ...(e.GATEWAY_ML_URL ? { url: e.GATEWAY_ML_URL } : {}),
+          ...(e.GATEWAY_ML_MODEL ? { model: e.GATEWAY_ML_MODEL } : {}),
+          ...common,
+        };
+        break;
+    }
+  }
+
   const config: Partial<GatewayConfig> = {
     port: e.GATEWAY_PORT,
     host: e.GATEWAY_HOST,
@@ -119,6 +179,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<Gat
       injectionSensitivity: e.GATEWAY_INJECTION_SENSITIVITY,
       injectionAction: e.GATEWAY_INJECTION_ACTION,
       injectionCustomPatterns: e.GATEWAY_INJECTION_CUSTOM_PATTERNS,
+      mlClassifier,
       logInput: e.GATEWAY_LOG_INPUT,
     },
     output: {
@@ -162,6 +223,14 @@ export function configWarnings(config: GatewayConfig): string[] {
   }
   if (!config.apiKey) {
     warnings.push('No GATEWAY_API_KEY set: the gateway accepts unauthenticated requests. Fine locally, not for a shared network.');
+  }
+  const ml = config.input.mlClassifier;
+  if (ml?.backend === 'jev' && !ml.apiKey && !process.env.TYPESAFE_API_KEY) {
+    warnings.push('mlClassifier backend is "jev" but no API key is configured (TYPESAFE_API_KEY). Every classification will fail' +
+      (ml.failClosed ? ' and requests will be blocked (failClosed).' : ' and the gateway will fail open.'));
+  }
+  if (ml?.backend === 'transformers') {
+    warnings.push('mlClassifier backend "transformers" loads an ONNX model on the first request; expect a one-off delay (and a download unless cached).');
   }
   return warnings;
 }

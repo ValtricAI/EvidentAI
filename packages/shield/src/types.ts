@@ -2,9 +2,11 @@
  * Shield Types - Runtime LLM Protection
  */
 
+import type { MLClassifier, MLClassifierConfig } from '@evidentai/detectors';
+
 export type ThreatLevel = 'none' | 'low' | 'medium' | 'high' | 'critical';
 
-export type AnalyzerType = 'heuristic' | 'llm-judge';
+export type AnalyzerType = 'heuristic' | 'ml' | 'llm-judge';
 
 export interface ThreatDetection {
   /** Whether a threat was detected */
@@ -21,6 +23,19 @@ export interface ThreatDetection {
   indicators: string[];
   /** Time taken to analyze in ms */
   latencyMs: number;
+  /** Classifier probability of injection (ml analyzer only) */
+  score?: number;
+  /** Set when the analyzer failed and the shield fell open or closed */
+  error?: string;
+}
+
+export interface DeferralRecord {
+  /** Why the request was deferred to the LLM judge */
+  reason: string;
+  /** The ml score that fell inside the deferral band */
+  mlScore: number;
+  /** The level the judge returned */
+  judgeLevel: ThreatLevel;
 }
 
 export interface AnalysisResult {
@@ -38,6 +53,32 @@ export interface AnalysisResult {
   totalLatencyMs: number;
   /** Timestamp */
   timestamp: string;
+  /** Present when the ml score was uncertain and the LLM judge decided */
+  deferred?: DeferralRecord;
+}
+
+/** Options for the `ml` analyzer: a classifier backend plus score cut points. */
+export type MLAnalyzerConfig = MLClassifierConfig & {
+  /** Score at or above which the threat is `critical`. Default 0.9 */
+  criticalAbove?: number;
+  /** Decision threshold: at or above is `high`. Default 0.5 */
+  threshold?: number;
+  /** At or above is `medium` (suspicious). Default 0.3 */
+  mediumAbove?: number;
+  /**
+   * When the classifier errors: false (default) fails open and reports
+   * level `none` with the error; true fails closed and reports `critical`.
+   */
+  failClosed?: boolean;
+};
+
+export interface DeferralConfig {
+  /** Escalate uncertain ml scores to the llm-judge. Default false */
+  enabled: boolean;
+  /** Lower bound of the uncertainty band (inclusive). Default 0.3 */
+  lower: number;
+  /** Upper bound of the uncertainty band (exclusive). Default 0.7 */
+  upper: number;
 }
 
 export interface ShieldConfig {
@@ -67,6 +108,15 @@ export interface ShieldConfig {
     /** Sensitivity: 'low' | 'medium' | 'high' */
     sensitivity?: 'low' | 'medium' | 'high';
   };
+  /** ml analyzer options */
+  ml?: MLAnalyzerConfig;
+  /** Escalate uncertain ml scores to the llm-judge */
+  deferral?: DeferralConfig;
+  /**
+   * Build the classifier yourself instead of letting the shield create one
+   * from `ml`. Mainly for tests and in-process models.
+   */
+  classifierFactory?: (config: MLAnalyzerConfig) => MLClassifier;
 }
 
 export interface Analyzer {

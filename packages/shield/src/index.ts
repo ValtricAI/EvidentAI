@@ -28,11 +28,12 @@ import { randomUUID } from 'node:crypto';
 import type {
   ShieldConfig,
   AnalysisResult,
+  DeferralRecord,
   ThreatDetection,
   ThreatLevel,
   RequestContext,
 } from './types.js';
-import { getAnalyzers } from './analyzers/index.js';
+import { getAnalyzer, getAnalyzers } from './analyzers/index.js';
 import { parseConfig } from './config/schema.js';
 
 export class Shield {
@@ -68,8 +69,34 @@ export class Shield {
       }
     }
 
+    // Deferral: an uncertain classifier score is escalated to the LLM judge,
+    // whose verdict replaces the classifier's.
+    let resultsForDecision = analyzerResults;
+    let deferred: DeferralRecord | undefined;
+    const deferral = this.config.deferral;
+    const mlResult = analyzerResults.find((r) => r.analyzer === 'ml' && typeof r.score === 'number');
+
+    if (
+      deferral?.enabled &&
+      mlResult &&
+      mlResult.score !== undefined &&
+      mlResult.score >= deferral.lower &&
+      mlResult.score < deferral.upper &&
+      this.config.llm &&
+      !analyzerResults.some((r) => r.analyzer === 'llm-judge')
+    ) {
+      const judgeResult = await getAnalyzer('llm-judge').analyze(context.input, this.config);
+      analyzerResults.push(judgeResult);
+      resultsForDecision = analyzerResults.filter((r) => r !== mlResult);
+      deferred = {
+        reason: `ml score ${mlResult.score.toFixed(3)} inside deferral band [${deferral.lower}, ${deferral.upper})`,
+        mlScore: mlResult.score,
+        judgeLevel: judgeResult.level,
+      };
+    }
+
     // Aggregate results - use highest threat level
-    const threat = this.aggregateResults(analyzerResults);
+    const threat = this.aggregateResults(resultsForDecision);
     const blocked = this.shouldBlock(threat.level);
 
     const result: AnalysisResult = {
@@ -80,6 +107,7 @@ export class Shield {
       blocked,
       totalLatencyMs: performance.now() - startTime,
       timestamp: new Date().toISOString(),
+      ...(deferred ? { deferred } : {}),
     };
 
     // Trigger callbacks
@@ -224,10 +252,25 @@ export type {
   ThreatLevel,
   RequestContext,
   AnalyzerType,
+  MLAnalyzerConfig,
+  DeferralConfig,
+  DeferralRecord,
 } from './types.js';
 
 // Re-export analyzers
-export { heuristicAnalyzer, llmJudgeAnalyzer, getAnalyzer, getAnalyzers } from './analyzers/index.js';
+export { heuristicAnalyzer, llmJudgeAnalyzer, mlAnalyzer, getAnalyzer, getAnalyzers } from './analyzers/index.js';
+
+// Re-export the classifier toolkit so users can register their own backends
+export {
+  createClassifier,
+  registerClassifierBackend,
+  unregisterClassifierBackend,
+  scoreToSeverity,
+  MLClassifierError,
+  type MLClassifier,
+  type MLClassifyResult,
+  type MLClassifierConfig,
+} from '@evidentai/detectors';
 
 // Re-export config utilities
 export { parseConfig, validateConfig } from './config/schema.js';

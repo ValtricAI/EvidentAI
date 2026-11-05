@@ -8,7 +8,15 @@
  * - Logging and audit types
  */
 
-import type { InjectionCategory, PIIEntityType, PIIMatch, Severity, Confidence } from '@evidentai/detectors';
+import type {
+  InjectionCategory,
+  PIIEntityType,
+  PIIMatch,
+  Severity,
+  Confidence,
+  MLClassifier,
+  MLClassifierConfig,
+} from '@evidentai/detectors';
 
 // =============================================================================
 // OpenAI-Compatible API Types
@@ -175,7 +183,23 @@ export interface GatewayConfig {
     apiKey?: string;
     model?: string;
   };
+  /**
+   * Build the ML classifier yourself instead of letting the gateway create
+   * one from `input.mlClassifier`. Not serialisable; for tests and in-process
+   * models.
+   */
+  classifierFactory?: (config: GatewayMLConfig) => MLClassifier;
 }
+
+/** ML classifier layer for user messages. */
+export type GatewayMLConfig = MLClassifierConfig & {
+  /** `block` rejects requests scoring at or above `threshold`; `log` only reports. Default `log` */
+  action?: 'block' | 'log';
+  /** P(injection) at or above which the text counts as an attack. Default 0.5 */
+  threshold?: number;
+  /** Block when the classifier itself fails. Default false (fail open). */
+  failClosed?: boolean;
+};
 
 export interface InputPipelineConfig {
   /** Enable injection detection */
@@ -186,6 +210,11 @@ export interface InputPipelineConfig {
   injectionAction: 'block' | 'rephrase' | 'log';
   /** Extra regex sources treated as high-confidence injection patterns */
   injectionCustomPatterns?: string[];
+  /**
+   * Optional learned classifier run over the user messages after the regex
+   * layer. Unset by default.
+   */
+  mlClassifier?: GatewayMLConfig;
   /** Enable input logging */
   logInput: boolean;
 }
@@ -356,6 +385,16 @@ export class InjectionBlockedError extends GatewayError {
         technique: m.technique,
         confidence: m.confidence,
       })),
+    });
+  }
+}
+
+export class MLBlockedError extends GatewayError {
+  constructor(score: number, threshold: number, model: string) {
+    super('Request blocked by the injection classifier', 403, 'ml_blocked', {
+      score: Number(score.toFixed(4)),
+      threshold,
+      model,
     });
   }
 }

@@ -145,7 +145,7 @@ interface ShieldConfig {
   // Default: 'high'
   blockThreshold: ThreatLevel;
 
-  // Which analyzers to use: ['heuristic'] or ['heuristic', 'llm-judge']
+  // Which analyzers to use, in order: 'heuristic' | 'ml' | 'llm-judge'
   // Default: ['heuristic']
   analyzers: AnalyzerType[];
 
@@ -170,6 +170,23 @@ interface ShieldConfig {
   heuristic?: {
     customPatterns?: string[];  // Additional regex patterns
     sensitivity?: 'low' | 'medium' | 'high';  // Default: 'medium'
+  };
+
+  // ml analyzer: a classifier backend plus score cut points (see below)
+  ml?: {
+    backend: 'transformers' | 'http' | 'jev' | 'custom';
+    // backend-specific fields, e.g. model / url / apiKey
+    criticalAbove?: number;  // Default 0.9  -> 'critical'
+    threshold?: number;      // Default 0.5  -> 'high'
+    mediumAbove?: number;    // Default 0.3  -> 'medium'
+    failClosed?: boolean;    // Default false: a classifier error yields 'none'
+  };
+
+  // Escalate uncertain ml scores to the llm-judge (needs `llm`)
+  deferral?: {
+    enabled: boolean;  // Default false
+    lower: number;     // Default 0.3 (inclusive)
+    upper: number;     // Default 0.7 (exclusive)
   };
 }
 ```
@@ -197,11 +214,64 @@ interface ShieldConfig {
   - Delimiter/token injection
   - Context manipulation
 
-### LLM-Judge (Layer 2)
+### ML classifier (Layer 2)
+- **Speed**: 10-50ms locally on CPU, network latency for hosted backends
+- **Method**: a learned classifier returns P(injection) in [0, 1]; the score is
+  mapped to a threat level with the cut points in `ml`
+- **Best for**: paraphrased or novel attacks that have no fixed vocabulary
+- **Backends** (same config shape in `@evidentai/gateway`):
+
+| Backend | Config | Notes |
+|---------|--------|-------|
+| `transformers` | `{ backend: 'transformers', model?: string }` | Local ONNX model through `@huggingface/transformers` (install it separately; it is an optional peer dependency). Default model `protectai/deberta-v3-base-prompt-injection-v2` (Apache-2.0). Meta's `meta-llama/Llama-Prompt-Guard-2-86M` and `-22M` work too but are gated: set `HF_TOKEN`. A local directory also works, with an optional `calibration.json` `{"temperature": t}` applied to the logits. Options: `localFilesOnly`, `cacheDir`, `dtype`, `injectionLabel`, `temperature`, `maxChars`. |
+| `http` | `{ backend: 'http', url, headers?, scorePath?, textField?, timeoutMs? }` | Your own endpoint: the shield POSTs `{text}` and reads the score at `scorePath` (default `score`). |
+| `jev` | `{ backend: 'jev', apiKey?, url?, model?, scoreQuestion?, choiceQuestion?, scorePaths? }` | TypeSafe AI's Jev decision model. Key from `TYPESAFE_API_KEY`. Written against the published API shape (`POST /v1/systemone`, `{model, state, questions}`) but not yet verified against the live service; `scorePaths` lists where the numeric answer is looked for, override it once you have a real response. |
+| `custom` | `{ backend: 'custom', name, options? }` | A backend you registered with `registerClassifierBackend(name, factory)`. |
+
+```typescript
+import { Shield } from '@evidentai/shield';
+
+const shield = new Shield({
+  analyzers: ['heuristic', 'ml'],
+  ml: { backend: 'transformers', threshold: 0.6 },
+});
+```
+
+The classifier is loaded once and cached. By default the analyzer **fails
+open**: if the model cannot be loaded or the endpoint is down, the ml result
+is level `none` with `error` set and the request proceeds on the other
+analyzers. Set `ml.failClosed: true` to treat classifier errors as `critical`.
+
+### LLM-Judge (Layer 3)
 - **Speed**: 200-400ms
 - **Method**: Uses a small, fast LLM to classify intent
 - **Best for**: Catching novel/obfuscated attacks
 - **Models**: GPT-4o-mini (OpenAI) or Claude Haiku (Anthropic)
+
+### Deferral: calibrate, then escalate
+
+Classifier scores near the decision boundary are the ones most often wrong.
+With `deferral.enabled`, an ml score inside `[lower, upper)` is escalated to
+the llm-judge and the judge's verdict replaces the classifier's. Scores
+outside the band are decided by the classifier alone, so the judge runs only
+on the uncertain minority of requests.
+
+```typescript
+const shield = new Shield({
+  analyzers: ['heuristic', 'ml'],
+  ml: { backend: 'transformers' },
+  llm: { provider: 'openai' },
+  deferral: { enabled: true, lower: 0.3, upper: 0.7 },
+});
+
+const result = await shield.analyze({ input });
+if (result.deferred) {
+  console.log(result.deferred); // { reason, mlScore, judgeLevel }
+}
+```
+
+Deferral requires `llm` to be configured; without it the classifier's own
+level stands. If `llm-judge` is already in `analyzers` it is not run twice.
 
 ## Analysis Result
 

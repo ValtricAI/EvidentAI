@@ -31,3 +31,5 @@ export {
   type DetectPIIOptions,
   type RedactPIIOptions,
 } from './pii';
+
+export * from './ml/index';

@@ -141,6 +141,16 @@ export class Gateway {
           sensitivity: this.config.input.injectionSensitivity,
           action: this.config.input.injectionAction,
         },
+        ml: this.config.input.mlClassifier
+          ? {
+              enabled: true,
+              backend: this.config.input.mlClassifier.backend,
+              model: 'model' in this.config.input.mlClassifier ? this.config.input.mlClassifier.model : undefined,
+              threshold: this.config.input.mlClassifier.threshold ?? 0.5,
+              action: this.config.input.mlClassifier.action ?? 'log',
+              failClosed: this.config.input.mlClassifier.failClosed ?? false,
+            }
+          : { enabled: false },
         pii: {
           enabled: this.config.output.detectPII,
           types: this.config.output.piiTypes,
@@ -293,8 +303,19 @@ if (process.env.EVIDENTAI_GATEWAY_MAIN === '1' || import.meta.url === `file://${
 
 export { Gateway as default };
 export { DEFAULT_CONFIG, configFromEnv, resolveConfig, configWarnings, ConfigError } from './config.js';
+export { classifyUserMessages, userText } from './pipeline/ml-classifier.js';
+export {
+  createClassifier,
+  registerClassifierBackend,
+  unregisterClassifierBackend,
+  MLClassifierError,
+  type MLClassifier,
+  type MLClassifyResult,
+  type MLClassifierConfig,
+} from '@evidentai/detectors';
 export type {
   GatewayConfig,
+  GatewayMLConfig,
   InputPipelineConfig,
   OutputPipelineConfig,
   ChatCompletionRequest,
@@ -321,6 +342,7 @@ export {
   AuthenticationError,
   ValidationError,
   InjectionBlockedError,
+  MLBlockedError,
   PIIBlockedError,
   ProviderError,
 } from './types.js';
