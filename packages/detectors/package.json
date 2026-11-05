@@ -14,7 +14,8 @@
     }
   },
   "files": [
-    "src"
+    "src",
+    "bin"
   ],
   "scripts": {
     "test": "vitest run",
@@ -24,6 +25,14 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "tsx": "^4.21.0",
+    "@huggingface/transformers": "^3.5.0"
+  },
+  "bin": {
+    "evidentai-detectors-score": "./bin/score.mjs"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
   }
 }
